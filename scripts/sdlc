@@ -1,0 +1,473 @@
+#!/usr/bin/env python3
+"""sdlc: doctor and ladder for a repository that uses the ai-native-sdlc template.
+
+Standard library only; Python 3.9+. Managed by the template; do not edit by hand.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import pathlib
+import re
+import subprocess
+import sys
+from dataclasses import dataclass, field
+
+CEILING = 600
+POINTER_POLICY = "Read and follow `.gravity/policy.md`."
+POINTER_CONVENTIONS = "Lifecycle conventions: `{docs_root}/sdlc/conventions.md`."
+SUPERPOWERS_ADAPTER = """When using superpowers: write design specs to `{spec_path}` and
+implementation plans to `{plan_path}`, not to `docs/superpowers/`. Before
+brainstorming a change that is not an exact mechanical change, check for an
+accepted intent at `{intent_path}` and capture one first if absent. A
+design answering an intent includes the sections in
+`{docs_root}/changes/_templates/spec-sections.md`. Code review follows
+`REVIEW.md`."""
+CLAUDE_ADAPTER = "@AGENTS.md\n@.gravity/policy.md\n"
+COPILOT_POINTER = "Read and follow `AGENTS.md` and `.gravity/policy.md`."
+SKILL_DIRS = (".agents/skills", ".github/skills", ".claude/skills")
+INSTALL_COPILOT = "gh skill install MetOffice/ai-native-sdlc --all --agent github-copilot"
+INSTALL_CLAUDE = "claude plugin marketplace add MetOffice/ai-native-sdlc && claude plugin install gravity-sdlc@ai-native-sdlc"
+
+DECL = re.compile(r"^- (Lifecycle gates|Engine|Production environment|Release approval|Protected paths|Review findings|Records): (.+?)\.?$", re.M)
+ROW = re.compile(r"^\| (Intents|Designs|Plans|Incidents|Records) \| `?([^|`]+?)`? \|", re.M)
+DATE = re.compile(r"\b20\d{2}-[01]\d-[0-3]\d\b")
+HASH = re.compile(r"\b(?=[0-9a-f]*[a-f])(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b")
+
+
+@dataclass
+class Policy:
+    path: pathlib.Path
+    text: str = ""
+    declarations: dict = field(default_factory=dict)
+    documents: dict = field(default_factory=dict)
+
+    @property
+    def exists(self) -> bool:
+        return self.path.is_file()
+
+
+@dataclass
+class Check:
+    name: str
+    status: str  # PASS | WARN | FAIL
+    evidence: str
+    fix: str = ""
+
+    def as_dict(self) -> dict:
+        return {"name": self.name, "status": self.status, "evidence": self.evidence, "fix": self.fix}
+
+
+def repo_root() -> pathlib.Path:
+    try:
+        out = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, check=True).stdout.strip()
+        return pathlib.Path(out)
+    except Exception:
+        return pathlib.Path.cwd()
+
+
+def read_policy(root: pathlib.Path) -> Policy:
+    p = Policy(root / ".gravity" / "policy.md")
+    if p.exists:
+        p.text = p.path.read_text(encoding="utf-8")
+        p.declarations = {k: v.strip() for k, v in DECL.findall(p.text)}
+        p.documents = {k: v.strip() for k, v in ROW.findall(p.text)}
+    return p
+
+
+def read_answers(root: pathlib.Path) -> dict:
+    """Minimal YAML reader for the flat answers file: scalars and one-level lists."""
+    path = root / ".copier-answers.yml"
+    answers: dict = {}
+    if not path.is_file():
+        return answers
+    key = None
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.rstrip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("- ") and key:
+            answers.setdefault(key, [])
+            if isinstance(answers[key], list):
+                answers[key].append(line[2:].strip().strip("'\""))
+            continue
+        if ":" in line and not line.startswith(" "):
+            key, _, value = line.partition(":")
+            key, value = key.strip(), value.strip().strip("'\"")
+            if value == "":
+                answers[key] = []
+            elif value in ("true", "false"):
+                answers[key] = value == "true"
+            else:
+                answers[key] = value
+    return answers
+
+
+def docs_root_of(answers: dict, policy: Policy) -> str:
+    if answers.get("docs_root"):
+        return str(answers["docs_root"]).rstrip("/")
+    intents = policy.documents.get("Intents", "")
+    return intents.split("/changes/")[0] if "/changes/" in intents else "docs"
+
+
+def skills_discoverable(root: pathlib.Path, hosts: list, surface: str) -> tuple[bool, str]:
+    for d in SKILL_DIRS:
+        if surface == "copilot-vscode" and d == ".claude/skills":
+            continue
+        if (root / d / "using-sdlc" / "SKILL.md").is_file():
+            return True, f"{d}/using-sdlc/SKILL.md"
+    if "claude" in hosts:  # Claude Code's plugin registry is evidence only where Claude Code is a host
+        installed = pathlib.Path.home() / ".claude" / "plugins" / "installed_plugins.json"
+        if installed.is_file() and "gravity-sdlc@" in installed.read_text(encoding="utf-8", errors="replace"):
+            return True, str(installed)
+    return False, "no using-sdlc skill under " + ", ".join(SKILL_DIRS)
+
+
+def engine_check(root: pathlib.Path, answers: dict, policy: Policy, hosts: list) -> Check:
+    if policy.declarations.get("Engine", "").lower() == "none":
+        return Check("engine", "PASS", "policy declares Engine: none")
+    engine = answers.get("engine", "gravity")
+    installed = pathlib.Path.home() / ".claude" / "plugins" / "installed_plugins.json"
+    installed_text = installed.read_text(encoding="utf-8", errors="replace") if installed.is_file() and "claude" in hosts else ""
+    if engine == "gravity":
+        for d in SKILL_DIRS:
+            if (root / d / "brainstorming" / "SKILL.md").is_file():
+                return Check("engine", "PASS", f"gravity skills at {d}")
+        if "gravity@" in installed_text:
+            return Check("engine", "PASS", "gravity plugin installed")
+        return Check("engine", "WARN", "engine is gravity but its skills are not discoverable",
+                     "install gravity for your hosts (see https://github.com/MetOffice/gravity) or declare `- Engine: none.` in the policy")
+    if engine == "superpowers":
+        if "superpowers@" in installed_text:
+            return Check("engine", "PASS", "superpowers plugin installed")
+        hint = ("claude plugin install superpowers@claude-plugins-official, or declare `- Engine: none.`" if "claude" in hosts
+                else "superpowers is a Claude Code plugin: add claude to hosts and install it, or declare `- Engine: none.`")
+        return Check("engine", "WARN", "engine is superpowers but the plugin is not installed", hint)
+    return Check("engine", "WARN", f"engine '{engine}' not declared in policy", "add `- Engine: none.` to the Lifecycle section")
+
+
+def run_checks(root: pathlib.Path, surface: str = "default") -> list[Check]:
+    checks: list[Check] = []
+    policy = read_policy(root)
+    answers = read_answers(root)
+    docs_root = docs_root_of(answers, policy)
+    hosts = answers.get("hosts") or ["claude", "copilot"]
+    if surface == "copilot-vscode":
+        hosts = ["copilot"]
+
+    if not policy.exists:
+        checks.append(Check("policy-present", "FAIL", ".gravity/policy.md is missing", "copier copy <template> . (owned files are seeded once)"))
+        return checks
+    checks.append(Check("policy-present", "PASS", str(policy.path.relative_to(root))))
+
+    words = len(policy.text.split())
+    problems = []
+    if words > CEILING:
+        problems.append(f"{words} words above the {CEILING}-word ceiling")
+    if DATE.search(policy.text):
+        problems.append("carries a date")
+    if HASH.search(policy.text):
+        problems.append("carries a commit hash")
+    checks.append(Check("policy-lint", "WARN" if problems else "PASS", "; ".join(problems) or f"{words} words", "move records out of the policy" if problems else ""))
+
+    if "## Lifecycle" in policy.text and "Lifecycle gates" in policy.declarations:
+        checks.append(Check("policy-lifecycle", "PASS", f"Lifecycle gates: {policy.declarations['Lifecycle gates']}"))
+    else:
+        checks.append(Check("policy-lifecycle", "FAIL", "no Lifecycle section with a `Lifecycle gates` line", "re-add the Lifecycle section from the template's policy"))
+
+    missing = [k for k in ("Intents", "Designs", "Plans", "Incidents") if k not in policy.documents]
+    if missing:
+        checks.append(Check("documents-table", "FAIL", "documents table lacks " + ", ".join(missing), "add the rows to the Documents table"))
+    else:
+        parent = root / policy.documents["Intents"].split("/{date}")[0].split("{date}")[0]
+        creatable = parent.exists() or os.access(parent.parents[0] if parent.parent.exists() else root, os.W_OK)
+        checks.append(Check("documents-table", "PASS" if creatable else "WARN", f"Intents at {policy.documents['Intents']}", "" if creatable else "create the parent directory"))
+
+    agents = root / "AGENTS.md"
+    if not agents.is_file():
+        checks.append(Check("agents-md", "FAIL", "AGENTS.md is missing", "copier copy <template> . seeds it"))
+    elif POINTER_POLICY in agents.read_text(encoding="utf-8"):
+        checks.append(Check("agents-md", "PASS", "AGENTS.md points at the policy"))
+    else:
+        checks.append(Check("agents-md", "WARN", "AGENTS.md exists but does not point at the policy", "python scripts/sdlc doctor --retrofit"))
+
+    if "claude" in hosts:
+        claude = root / "CLAUDE.md"
+        text = claude.read_text(encoding="utf-8") if claude.is_file() else ""
+        ok = "@.gravity/policy.md" in text or "@AGENTS.md" in text
+        why = "CLAUDE.md imports AGENTS.md or the policy" if ok else ("CLAUDE.md lacks the imports" if claude.is_file() else "CLAUDE.md is missing")
+        checks.append(Check("adapter-claude", "PASS" if ok else "WARN", why, "" if ok else "python scripts/sdlc doctor --retrofit"))
+    if "copilot" in hosts:
+        cp = root / ".github" / "copilot-instructions.md"
+        text = cp.read_text(encoding="utf-8") if cp.is_file() else ""
+        ok = ".gravity/policy.md" in text
+        why = "copilot-instructions.md points at the policy" if ok else ("copilot-instructions.md lacks the pointer" if cp.is_file() else "copilot-instructions.md is missing")
+        checks.append(Check("adapter-copilot", "PASS" if ok else "WARN", why, "" if ok else "python scripts/sdlc doctor --retrofit"))
+
+    ss = root / docs_root / "changes" / "_templates" / "spec-sections.md"
+    checks.append(Check("spec-sections", "PASS" if ss.is_file() else "FAIL", str(ss.relative_to(root)), "" if ss.is_file() else "copier update"))
+    rv = root / "REVIEW.md"
+    checks.append(Check("review-md", "PASS" if rv.is_file() else "FAIL", "REVIEW.md", "" if rv.is_file() else "copier copy <template> ."))
+
+    ver = root / ".gravity" / "verification.md"
+    has_cmd = ver.is_file() and any(l.startswith("- ") and "No commands recorded" not in l for l in ver.read_text(encoding="utf-8").splitlines())
+    checks.append(Check("verification", "PASS" if has_cmd else "WARN", ".gravity/verification.md lists commands" if has_cmd else "no verification commands recorded", "" if has_cmd else "add build, test and lint commands to .gravity/verification.md"))
+
+    found, where = skills_discoverable(root, hosts, surface)
+    fix = INSTALL_COPILOT if "claude" not in hosts else INSTALL_CLAUDE + "  # or: " + INSTALL_COPILOT
+    checks.append(Check("skills-discoverable", "PASS" if found else "WARN", where, "" if found else fix))
+
+    checks.append(engine_check(root, answers, policy, hosts))
+
+    conflict = [p for p in (root / docs_root / "conf.py", root / docs_root / "mkdocs.yml", root / "mkdocs.yml") if p.is_file()]
+    if conflict:
+        checks.append(Check("docs-build-conflict", "WARN", f"{conflict[0].relative_to(root)} builds documentation from {docs_root}/",
+                            f"exclude {docs_root}/changes/**, {docs_root}/incidents/** and {docs_root}/sdlc/** from the docs build, or re-run copier with a different docs_root"))
+    else:
+        checks.append(Check("docs-build-conflict", "PASS", f"no docs build rooted at {docs_root}/"))
+
+    drift = []
+    if answers.get("enforcement") and policy.declarations.get("Lifecycle gates", "").lower() != str(answers["enforcement"]).lower():
+        drift.append(f"enforcement answer {answers['enforcement']} vs policy {policy.declarations.get('Lifecycle gates')}")
+    if answers.get("engine") == "none" and policy.declarations.get("Engine", "").lower() != "none":
+        drift.append("engine answer none but policy does not declare Engine: none")
+    for key, kind in (("intent_path", "Intents"), ("spec_path", "Designs"), ("plan_path", "Plans")):
+        if answers.get(key) and policy.documents.get(kind) and answers[key] != policy.documents[kind]:
+            drift.append(f"{key} answer {answers[key]} vs policy {policy.documents[kind]}")
+    checks.append(Check("answers-drift", "WARN" if drift else "PASS", "; ".join(drift) or "answers and policy agree",
+                        "the policy is authoritative; re-run copier with matching answers or accept the difference" if drift else ""))
+    return checks
+
+
+def retrofit(root: pathlib.Path, yes: bool, surface: str = "default") -> list[str]:
+    """Append pointer lines to pre-existing adapters, create an adapter that is missing for an enabled host,
+    and move substantive CLAUDE.md content into AGENTS.md."""
+    actions: list[str] = []
+    answers = read_answers(root)
+    policy = read_policy(root)
+    docs_root = docs_root_of(answers, policy)
+    hosts = answers.get("hosts") or ["claude", "copilot"]
+    assumed = "" if answers.get("hosts") or surface == "copilot-vscode" else " (hosts assumed claude and copilot: none declared in .copier-answers.yml)"
+    if surface == "copilot-vscode":
+        hosts = ["copilot"]
+    agents = root / "AGENTS.md"
+    if not agents.is_file():
+        return ["AGENTS.md is missing; run copier copy first"]
+    text = agents.read_text(encoding="utf-8")
+    additions = []
+    if POINTER_POLICY not in text:
+        additions.append(POINTER_POLICY)
+    conv = POINTER_CONVENTIONS.format(docs_root=docs_root)
+    if conv not in text:
+        additions.append(conv)
+    pointers = list(additions)
+
+    def chain_path(answer_key: str, row: str, name: str) -> str:
+        return (answers.get(answer_key) or policy.documents.get(row)
+                or f"{docs_root}/changes/{{date}}-{{slug}}/{name}.md")
+
+    if answers.get("engine") == "superpowers" and "When using superpowers:" not in text:
+        additions.append("\n" + SUPERPOWERS_ADAPTER.format(
+            spec_path=chain_path("spec_path", "Designs", "spec"),
+            plan_path=chain_path("plan_path", "Plans", "plan"),
+            intent_path=chain_path("intent_path", "Intents", "intent"),
+            docs_root=docs_root))
+    imported = ""
+    claude = root / "CLAUDE.md"
+    if "claude" in hosts and not claude.is_file():
+        actions.append("create CLAUDE.md with the two import lines" + assumed)
+    if "claude" in hosts and claude.is_file():
+        ctext = claude.read_text(encoding="utf-8")
+        without_comments = re.sub(r"<!--.*?-->", "", ctext, flags=re.S)
+        substantive = [l for l in without_comments.splitlines() if l.strip() and not l.startswith("@")]
+        if substantive:
+            imported = "\n## Imported from CLAUDE.md\n\n" + ctext.rstrip() + "\n"
+            actions.append("move CLAUDE.md content into AGENTS.md under '## Imported from CLAUDE.md' and replace CLAUDE.md with the two import lines")
+        elif "@.gravity/policy.md" not in ctext:
+            actions.append("append @.gravity/policy.md to CLAUDE.md, keeping any comment")
+    if pointers:
+        actions.append("append to AGENTS.md: " + " | ".join(pointers))
+    if len(additions) > len(pointers):
+        actions.append("append the superpowers adapter lines to AGENTS.md")
+    cp = root / ".github" / "copilot-instructions.md"
+    if "copilot" in hosts and not cp.is_file():
+        actions.append("create .github/copilot-instructions.md with the policy and conventions pointers" + assumed)
+    if "copilot" in hosts and cp.is_file() and ".gravity/policy.md" not in cp.read_text(encoding="utf-8"):
+        actions.append("append the policy pointer to .github/copilot-instructions.md")
+    if not yes:
+        return actions or ["nothing to do"]
+    if additions or imported:
+        block = "\n## Lifecycle\n\n" + "\n".join(additions) + "\n" if additions else ""
+        agents.write_text(text + ("" if text.endswith("\n") else "\n") + block + imported, encoding="utf-8")
+    if "claude" in hosts and claude.is_file():
+        ctext = claude.read_text(encoding="utf-8")
+        if imported:
+            claude.write_text(CLAUDE_ADAPTER, encoding="utf-8")
+        elif "@.gravity/policy.md" not in ctext:
+            claude.write_text(ctext.rstrip("\n") + "\n@.gravity/policy.md\n", encoding="utf-8")
+    if "copilot" in hosts and cp.is_file() and ".gravity/policy.md" not in cp.read_text(encoding="utf-8"):
+        cp.write_text(cp.read_text(encoding="utf-8").rstrip("\n") + "\n\n" + COPILOT_POINTER + "\n", encoding="utf-8")
+    # Absent adapters for enabled hosts: recreate what the template renders.
+    if "claude" in hosts and not claude.is_file():
+        claude.write_text(CLAUDE_ADAPTER, encoding="utf-8")
+    if "copilot" in hosts and not cp.is_file():
+        cp.parent.mkdir(parents=True, exist_ok=True)
+        cp.write_text("# Repository instructions\n\n" + COPILOT_POINTER + "\n" + conv + "\n", encoding="utf-8")
+    return actions or ["nothing to do"]
+
+
+BOUNDARIES = {
+    "copilot-vscode": [
+        "no hooks: Copilot runs hooks in its CLI and cloud agent only",
+        "no automated review unless Copilot code review is enabled for the repository",
+        "skills route from their descriptions; there is no session-start reinforcement",
+        "instructions files under .github/instructions/ are loaded by VS Code too",
+    ],
+}
+
+
+def cmd_doctor(args) -> int:
+    root = repo_root()
+    if args.retrofit:
+        out = sys.stderr if args.json else sys.stdout
+        for a in retrofit(root, args.yes, args.surface):
+            line = a if a == "nothing to do" or a.startswith("AGENTS.md is missing") else ("done  " if args.yes else "would ") + a
+            print(line, file=out)
+    checks = run_checks(root, args.surface)
+    if args.json:
+        print(json.dumps({"surface": args.surface, "checks": [c.as_dict() for c in checks]}, indent=1))
+    else:
+        for c in checks:
+            line = f"{c.status:<5} {c.name:<22} {c.evidence}"
+            if c.fix:
+                line += f"\n      fix: {c.fix}"
+            print(line)
+        for b in BOUNDARIES.get(args.surface, []):
+            print(f"note  {b}")
+    return 1 if any(c.status == "FAIL" for c in checks) else 0
+
+
+def _first_parent_commits(root: pathlib.Path, days: int = 30) -> list[str]:
+    try:
+        out = subprocess.run(["git", "log", "--first-parent", f"--since={days}.days", "--format=%H"],
+                             cwd=root, capture_output=True, text=True, check=True).stdout
+    except Exception:
+        return []
+    return [l for l in out.split() if l]
+
+
+def _touched(root: pathlib.Path, commit: str) -> list[str]:
+    # Compare against the first parent explicitly: plain diff-tree prints nothing for a
+    # merge commit, and on a repository that merges branches first-parent history is
+    # mostly merge commits. A commit whose first parent is unavailable (the root commit,
+    # or the boundary of a shallow clone) falls back to --root.
+    for spec in ([f"{commit}^1", commit], ["--root", commit]):
+        try:
+            out = subprocess.run(["git", "diff-tree", "--no-commit-id", "--name-only", "-r", *spec],
+                                 cwd=root, capture_output=True, text=True, check=True).stdout
+        except Exception:
+            continue
+        return [l for l in out.split("\n") if l]
+    return []
+
+
+def _glob_of(path_pattern: str) -> str:
+    return path_pattern.replace("{date}", "*").replace("{slug}", "*")
+
+
+def compute_ladder(root: pathlib.Path) -> dict:
+    import fnmatch
+    checks = {c.name: c for c in run_checks(root)}
+    policy = read_policy(root)
+    answers = read_answers(root)
+    docs_root = docs_root_of(answers, policy)
+    levels = []
+
+    # Level 0 is measurement, reported through the baseline file.
+    baseline = root / docs_root / "sdlc" / "baseline.md"
+    has_numbers = baseline.is_file() and any(
+        l.startswith("|") and l.count("|") >= 5 and any(ch.isdigit() for ch in l.split("|")[2]) and "Metric" not in l
+        for l in baseline.read_text(encoding="utf-8").splitlines())
+
+    l1_needed = ("policy-present", "policy-lifecycle", "agents-md", "skills-discoverable", "engine")
+    l1_ok = all(checks.get(n) and checks[n].status == "PASS" for n in l1_needed)
+    levels.append({"level": 1, "status": "reached" if l1_ok else "not reached",
+                   "evidence": [f"{n}: {checks[n].evidence}" for n in l1_needed if n in checks and checks[n].status == "PASS"],
+                   "needs": [f"{n}: {checks[n].fix or checks[n].evidence}" for n in l1_needed if n in checks and checks[n].status != "PASS"]})
+
+    spec_glob = _glob_of(policy.documents.get("Designs", f"{docs_root}/changes/*/spec.md"))
+    commits = _first_parent_commits(root)
+    linked = sum(1 for c in commits if any(fnmatch.fnmatch(p, spec_glob) for p in _touched(root, c)))
+    ratio = (linked / len(commits)) if commits else None
+    l2_needs = []
+    if not has_numbers:
+        l2_needs.append(f"record numbers in {docs_root}/sdlc/baseline.md")
+    if ratio is None:
+        l2_needs.append("no commits on this branch in the last 30 days to assess spec linkage")
+    elif ratio < 0.5:
+        l2_needs.append(f"{linked}/{len(commits)} commits in 30 days touch a design at {spec_glob}; half or more needed")
+    l2_ok = l1_ok and has_numbers and ratio is not None and ratio >= 0.5
+    levels.append({"level": 2, "status": "reached" if l2_ok else ("needs evidence" if l1_ok else "not reached"),
+                   "evidence": ([f"{linked}/{len(commits)} recent commits touch a design"] if commits else []) + (["baseline recorded"] if has_numbers else []),
+                   "needs": l2_needs})
+
+    detected3 = [e for e in ((root / "REVIEW.md").is_file() and "REVIEW.md present",) if e]
+    levels.append({"level": 3, "status": "needs evidence" if l2_ok else "not reached", "evidence": detected3,
+                   "needs": ["review findings on most agent-authored pull requests", "pull request size falling"]})
+    gates = policy.declarations.get("Lifecycle gates", "advisory")
+    levels.append({"level": 4, "status": "needs evidence" if l2_ok else "not reached",
+                   "evidence": [f"Lifecycle gates: {gates}"] if gates == "enforced" else [],
+                   "needs": ["stability no worse than baseline for two months", "Lifecycle gates: enforced" if gates != "enforced" else ""]})
+    records = "adopted" in policy.declarations.get("Records", "")
+    incidents = root / docs_root / "incidents"
+    levels.append({"level": 5, "status": "needs evidence" if l2_ok else "not reached",
+                   "evidence": (["records adopted"] if records else []) + ([f"{len(list(incidents.iterdir()))} incident record(s)"] if incidents.is_dir() and any(incidents.iterdir()) else []),
+                   "needs": ["every serious incident has a record linked to its chain"]})
+    for lv in levels:
+        lv["needs"] = [n for n in lv["needs"] if n]
+    current = max([lv["level"] for lv in levels if lv["status"] == "reached"], default=0)
+    nxt = {0: "reach level 1: AGENTS.md and policy present, lifecycle skills discoverable, engine installed or Engine: none declared",
+           1: f"reach level 2: record numbers in {docs_root}/sdlc/baseline.md and land designs at {spec_glob} for half or more of changes",
+           2: "reach level 3: REVIEW.md in use by an automated reviewer on most agent-authored pull requests"}.get(current, "keep collecting evidence for levels 3 to 5")
+    return {"current": current, "levels": levels, "next": nxt}
+
+
+def cmd_ladder(args) -> int:
+    result = compute_ladder(repo_root())
+    if args.json:
+        print(json.dumps(result, indent=1))
+        return 0
+    for lv in result["levels"]:
+        print(f"level {lv['level']}  {lv['status']}")
+        for e in lv["evidence"]:
+            print(f"         evidence: {e}")
+        for n in lv["needs"]:
+            print(f"         needs: {n}")
+    print(f"current level: {result['current']}")
+    print(f"next: {result['next']}")
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="sdlc", description=__doc__)
+    sub = p.add_subparsers(dest="command", required=True)
+    d = sub.add_parser("doctor", help="check the repository against the lifecycle template")
+    d.add_argument("--surface", default="default", choices=["default", "copilot-vscode"])
+    d.add_argument("--retrofit", action="store_true", help="propose (or with --yes apply) pointer lines in pre-existing adapters; create an adapter missing for an enabled host")
+    d.add_argument("--yes", action="store_true")
+    d.add_argument("--json", action="store_true")
+    d.set_defaults(func=cmd_doctor)
+    l = sub.add_parser("ladder", help="compute the adoption ladder level from what is present")
+    l.add_argument("--json", action="store_true")
+    l.set_defaults(func=cmd_ladder)
+    return p
+
+
+def main(argv=None) -> int:
+    args = build_parser().parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
