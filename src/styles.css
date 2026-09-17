@@ -1,0 +1,16 @@
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+  color: #ddd;
+  font: 13px system-ui, sans-serif;
+}
+#view {
+  display: block;
+  position: fixed;
+  inset: 0;
+  cursor: grab;
+  touch-action: none;
+}
+#view:active { cursor: grabbing; }
