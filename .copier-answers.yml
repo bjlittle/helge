@@ -1,0 +1,18 @@
+# Changes here will be overwritten by Copier; NEVER EDIT MANUALLY
+_commit: f5d900b
+_src_path: gh:MetOffice/ai-native-sdlc
+ci: github
+copilot_code_review: true
+docs_root: docs
+enforcement: enforced
+engine: superpowers
+hosts:
+- claude
+- copilot
+intent_path: docs/changes/{date}-{slug}/intent.md
+plan_path: docs/changes/{date}-{slug}/plan.md
+project_name: project-wibble
+spec_path: docs/changes/{date}-{slug}/spec.md
+verify_build: ''
+verify_lint: ''
+verify_test: ''
