@@ -56,6 +56,12 @@ describe('toHash / fromHash', () => {
     expect(fromHash(withParam(h, 'i', 'many'))).toBeNull();
     expect(fromHash(withParam(h, 'd', 'NaN'))).toBeNull();
     expect(fromHash(withParam(h, 'o', 'Infinity'))).toBeNull();
+    for (const key of ['s', 'i', 'd', 'o']) {
+      expect(fromHash(withParam(h, key, ''))).toBeNull();
+    }
+    expect(fromHash(withParam(h, 's', '0x10'))).toBeNull();
+    expect(fromHash(withParam(h, 'd', ' 5'))).toBeNull();
+    expect(fromHash(withParam(h, 'i', '1e'))).toBeNull();
   });
 
   it('rejects out-of-range scale and far-away centres', () => {

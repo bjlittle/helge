@@ -132,6 +132,7 @@ export function sameGeometry(a: ViewState, b: ViewState): boolean {
 }
 
 const HASH_DECIMAL = /^-?\d+(\.\d+)?$/;
+const HASH_NUMBER = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
 const HASH_PALETTE = /^[a-z0-9-]{1,32}$/;
 const MAX_CENTRE_CHARS = 400;
 const MAX_HASH_CHARS = 2000;
@@ -166,17 +167,20 @@ export function fromHash(hash: string): ViewState | null {
   }
   if (re.length > MAX_CENTRE_CHARS || im.length > MAX_CENTRE_CHARS) return null;
   if (!HASH_DECIMAL.test(re) || !HASH_DECIMAL.test(im)) return null;
+  if (!HASH_NUMBER.test(s)) return null;
   const scale = Number(s);
   if (!Number.isFinite(scale) || scale < SCALE_MIN || scale > SCALE_MAX) return null;
   let maxIter: number | 'auto';
   if (i === 'auto') {
     maxIter = 'auto';
   } else {
+    if (!HASH_NUMBER.test(i)) return null;
     const n = Number(i);
     if (!Number.isFinite(n)) return null;
     maxIter = clamp(Math.round(n), MIN_ITER, MAX_ITER);
   }
   if (!HASH_PALETTE.test(pal)) return null;
+  if (!HASH_NUMBER.test(d) || !HASH_NUMBER.test(o)) return null;
   const density = Number(d);
   const offset = Number(o);
   if (!Number.isFinite(density) || !Number.isFinite(offset)) return null;
