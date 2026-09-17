@@ -1,7 +1,7 @@
 ---
 title: Mandelbrot fractal generator and viewer
 author: Bill Little
-status: draft
+status: accepted
 date: 2026-09-17
 source: human
 risk: low
