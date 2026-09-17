@@ -1,5 +1,5 @@
 import {
-  add, cfromNumbers, crebits, csub, ctoNumbers, fromNumber, type BigComplex,
+  add, cfromNumbers, crebits, csub, ctoNumbers, fromDecimal, fromNumber, toDecimal, toNumber, type BigComplex,
 } from './bigfloat';
 
 export const MIN_ITER = 200;
@@ -129,4 +129,68 @@ export function sameGeometry(a: ViewState, b: ViewState): boolean {
   return a.scale === b.scale && a.maxIter === b.maxIter
     && a.centre.re.bits === b.centre.re.bits
     && a.centre.re.m === b.centre.re.m && a.centre.im.m === b.centre.im.m;
+}
+
+const HASH_DECIMAL = /^-?\d+(\.\d+)?$/;
+const HASH_PALETTE = /^[a-z0-9-]{1,32}$/;
+const MAX_CENTRE_CHARS = 400;
+const MAX_HASH_CHARS = 2000;
+const MAX_CENTRE_ABS = 4;
+
+export function toHash(view: ViewState): string {
+  const p = new URLSearchParams();
+  p.set('re', toDecimal(view.centre.re));
+  p.set('im', toDecimal(view.centre.im));
+  p.set('s', String(view.scale));
+  p.set('i', view.maxIter === 'auto' ? 'auto' : String(view.maxIter));
+  p.set('p', view.palette);
+  p.set('d', String(view.density));
+  p.set('o', String(view.offset));
+  return '#' + p.toString();
+}
+
+/** Parses and validates a hash. Returns null when any field is missing, malformed or out of range. */
+export function fromHash(hash: string): ViewState | null {
+  const text = hash.startsWith('#') ? hash.slice(1) : hash;
+  if (text.length === 0 || text.length > MAX_HASH_CHARS) return null;
+  const p = new URLSearchParams(text);
+  const re = p.get('re');
+  const im = p.get('im');
+  const s = p.get('s');
+  const i = p.get('i');
+  const pal = p.get('p');
+  const d = p.get('d');
+  const o = p.get('o');
+  if (re === null || im === null || s === null || i === null || pal === null || d === null || o === null) {
+    return null;
+  }
+  if (re.length > MAX_CENTRE_CHARS || im.length > MAX_CENTRE_CHARS) return null;
+  if (!HASH_DECIMAL.test(re) || !HASH_DECIMAL.test(im)) return null;
+  const scale = Number(s);
+  if (!Number.isFinite(scale) || scale < SCALE_MIN || scale > SCALE_MAX) return null;
+  let maxIter: number | 'auto';
+  if (i === 'auto') {
+    maxIter = 'auto';
+  } else {
+    const n = Number(i);
+    if (!Number.isFinite(n)) return null;
+    maxIter = clamp(Math.round(n), MIN_ITER, MAX_ITER);
+  }
+  if (!HASH_PALETTE.test(pal)) return null;
+  const density = Number(d);
+  const offset = Number(o);
+  if (!Number.isFinite(density) || !Number.isFinite(offset)) return null;
+  const bits = precisionBits(scale);
+  const centre: BigComplex = { re: fromDecimal(re, bits), im: fromDecimal(im, bits) };
+  if (Math.abs(toNumber(centre.re)) > MAX_CENTRE_ABS || Math.abs(toNumber(centre.im)) > MAX_CENTRE_ABS) {
+    return null;
+  }
+  return {
+    centre,
+    scale,
+    maxIter,
+    palette: pal,
+    density: clamp(density, DENSITY_MIN, DENSITY_MAX),
+    offset: offset - Math.floor(offset),
+  };
 }
