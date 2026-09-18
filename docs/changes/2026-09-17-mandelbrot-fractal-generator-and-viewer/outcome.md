@@ -13,7 +13,7 @@ record: https://github.com/bjlittle/wibble/pull/6
 
 ## Was the intent's outcome reached
 
-Partly, and the gap is a person's time rather than a defect.
+Yes, and the design's own check says so rather than a proxy for it.
 
 The intent asked for a custom Mandelbrot generator and viewer whose fractals
 display in Chrome. That exists and is merged: `main` at `9e01e2f` serves a
@@ -21,18 +21,20 @@ viewer that zooms, pans, recolours and saves, with arbitrary-precision
 perturbation and bilinear approximation carrying it well past the depth double
 precision alone reaches.
 
-What is not yet evidenced is the design's own end-to-end walkthrough. Steps 1,
-2, 5, 6, 7 and 8 are covered by the Playwright suite. Steps 3 and 4 — sharp
-detail at a zoom exponent of at least 25, and a full frame in under ten seconds
-at an exponent of at least 60 with the ceiling above 25,000 — need a person at
-a display in Chrome and have never been run. Until they are, the depth claim
-rests on inspected screenshots (the default view, and zoom 10^22.5 with a
-200,000 ceiling producing a correct minibrot with spiral arms in 14.5 s on the
-author's machine) rather than on the design's own check.
+The design's eight-step walkthrough is complete. Steps 1, 2, 5, 6, 7 and 8 are
+covered by the Playwright suite. Steps 3 and 4 — sharp detail at a zoom
+exponent of at least 25, and a full frame in under ten seconds at an exponent of
+at least 60 with the ceiling above 25,000 — need a person at a display, and Bill
+Little ran and confirmed both by hand in Chrome on 2026-09-18. Screenshots
+inspected during the build agree: the default view, and zoom 10^22.5 with a
+200,000 ceiling producing a correct minibrot with spiral arms in 14.5 s.
 
-For step 4, zoom interactively into any boundary region rather than pasting a
-deeper URL: the 32-digit seahorse-valley coordinate in the design is only
-meaningful to about 10⁻³².
+Steps 3 and 4 are the two the perturbation and bilinear-approximation machinery
+exists for, so they are the ones worth re-running by hand after any change to
+`perturb.ts`, `bla.ts` or `reference.ts`. When re-running step 4, zoom
+interactively into a boundary region rather than pasting a deeper URL: the
+32-digit seahorse-valley coordinate in the design is only meaningful to about
+10⁻³².
 
 ## Evidence
 
@@ -44,6 +46,12 @@ At `9e01e2f`, the merge commit, on the author's machine:
 | `npm test` | Test Files 13 passed (13), Tests 115 passed (115) |
 | `npm run build` | ✓ built in 86ms; `dist/` lists render-worker and reference-worker assets |
 | `npm run test:e2e` | 10 passed |
+
+The manual walkthrough was run separately, against `npm run dev` in Chrome: all
+eight steps pass, steps 3 and 4 confirmed by Bill Little on 2026-09-18. The
+frame time observed at depth was not captured here, so the design's "under ten
+seconds on an eight-core machine" rests on the runner's judgement rather than a
+recorded number.
 
 ## The chain
 
