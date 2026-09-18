@@ -8,7 +8,7 @@ import { colourise, paletteById, PALETTES } from './palette';
 import { Scheduler, type PassResult, type RenderTarget, type WorkerLike } from './scheduler';
 import { createUi } from './ui';
 import {
-  defaultView, fromHash, pan, sameGeometry, toHash, zoomAbout, zoomExponent, type ViewState,
+  defaultView, fromHash, maxScaleFor, pan, sameGeometry, toHash, zoomAbout, zoomExponent, type ViewState,
 } from './viewport';
 
 const canvas = document.getElementById('view') as HTMLCanvasElement;
@@ -24,8 +24,11 @@ function asWorkerLike(worker: Worker): WorkerLike {
 }
 
 function viewFromHash(hash: string): ViewState {
-  const parsed = fromHash(hash) ?? defaultView(target().widthCss);
-  return PALETTES.some((p) => p.id === parsed.palette) ? parsed : { ...parsed, palette: 'classic' };
+  const widthCss = target().widthCss;
+  const parsed = fromHash(hash) ?? defaultView(widthCss);
+  const withPalette = PALETTES.some((p) => p.id === parsed.palette) ? parsed : { ...parsed, palette: 'classic' };
+  const maxScale = maxScaleFor(widthCss);
+  return withPalette.scale > maxScale ? { ...withPalette, scale: maxScale } : withPalette;
 }
 
 let view: ViewState = viewFromHash(location.hash);
@@ -45,9 +48,18 @@ const ui = createUi(document.getElementById('ui') as HTMLElement, PALETTES, {
   onOffset: (o) => setView({ ...view, offset: o }),
   onMaxIter: (m) => setView({ ...view, maxIter: m }),
   onReset: () => setView(defaultView(target().widthCss)),
-  onSave: () => { void save(); },
+  onSave: () => { save().catch(reportSaveFailure); },
   onHelp: () => ui.toggleHelp(),
 });
+
+if (!crossOriginIsolated) {
+  ui.setStatus('This page needs cross-origin isolation. Serve it with npm run dev or npm run preview.');
+  throw new Error('crossOriginIsolated is false');
+}
+
+function reportSaveFailure(err: unknown): void {
+  ui.setStatus(`Save failed: ${err instanceof Error ? err.message : String(err)}`);
+}
 
 async function save(): Promise<void> {
   const blob = await canvasView.toBlob();
@@ -56,7 +68,9 @@ async function save(): Promise<void> {
   const a = document.createElement('a');
   a.href = url;
   a.download = name;
+  document.body.appendChild(a);
   a.click();
+  a.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
@@ -75,14 +89,18 @@ const scheduler = new Scheduler(
     onReferenceStart() { ui.setProgress(0, 1); },
     onReferenceProgress(done, total) { ui.setProgress(done, total); },
     onReferenceDone() { ui.clearProgress(); },
+    onError(message) { ui.setStatus(message); },
   },
 );
 
+let rgbaBuffer: Uint8ClampedArray<ArrayBuffer> = new Uint8ClampedArray(0);
+
 function repaint(): void {
   if (!latest) return;
-  const rgba = new Uint8ClampedArray(latest.width * latest.height * 4);
-  colourise(latest.values, paletteById(renderedView.palette), renderedView.density, renderedView.offset, rgba);
-  canvasView.paint(rgba, latest.width, latest.height, latest.stepCss, renderedView, !latest.final);
+  const size = latest.width * latest.height * 4;
+  if (rgbaBuffer.length !== size) rgbaBuffer = new Uint8ClampedArray(size);
+  colourise(latest.values, paletteById(renderedView.palette), renderedView.density, renderedView.offset, rgbaBuffer);
+  canvasView.paint(rgbaBuffer, latest.width, latest.height, latest.stepCss, renderedView, !latest.final);
 }
 
 function render(): void {
@@ -124,7 +142,7 @@ attachInput(canvas, {
   zoomAt: (px, py, factor) => setView(zoomAbout(view, px, py, factor, target().widthCss, target().heightCss)),
   panBy: (dx, dy) => setView(pan(view, dx, dy)),
   reset: () => setView(defaultView(target().widthCss)),
-  save: () => { void save(); },
+  save: () => { save().catch(reportSaveFailure); },
   toggleHelp: () => ui.toggleHelp(),
   closeHelp: () => ui.closeHelp(),
   gestureEnd: endGesture,

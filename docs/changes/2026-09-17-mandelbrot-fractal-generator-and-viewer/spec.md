@@ -68,6 +68,10 @@ carries no policy overlays beyond the repository's own lifecycle rules.
    flight, the scheduler terminates the reference worker and starts a fresh
    one, which is the only reliable way to abandon BigInt work promptly. The
    render pool has `navigator.hardwareConcurrency − 1` workers, minimum 1.
+   A worker error is reported in the readout; a render tile whose worker
+   threw is retried once on a replacement worker, and a failed reference
+   request clears the progress indicator. A page opened without
+   cross-origin isolation shows a message instead of a black canvas.
 
 7. **Reference orbit and BLA table in SharedArrayBuffers.** All render
    workers read one copy instead of each holding their own. Chrome only
@@ -150,7 +154,9 @@ carries no policy overlays beyond the repository's own lifecycle rules.
     the hash it wrote and ignores any `hashchange` that matches it. An empty
     or invalid hash arriving from the back button means the default view. `fromHash` validates every field and returns `null`, falling back
     to `DEFAULT_VIEW`, when any is missing or out of range. The hash grows to
-    a few hundred characters at extreme depth, which is acceptable.
+    a few hundred characters at extreme depth, which is acceptable. A hash
+    whose scale is beyond the zoom-out limit is clamped to that limit on
+    load.
 
 15. **Default view is numeric.** `DEFAULT_VIEW` is centre `−0.5 + 0i`,
     `scale = 4 / widthCss`, `maxIter: 'auto'`, palette `classic`,
@@ -165,7 +171,8 @@ carries no policy overlays beyond the repository's own lifecycle rules.
     `+` and `−` zoom by 2 about the centre, `R` resets to the default view,
     `S` saves, `?` toggles the help overlay, `Esc` closes it. Key presses
     with Ctrl, Meta or Alt held are left to the browser, and a focused
-    toolbar button does not suppress shortcuts; only text-entry fields do.
+    toolbar button does not suppress shortcuts; form controls that take
+    keyboard input (text fields, selects, sliders) do.
 
 17. **Save is a PNG of the canvas at the rendered resolution.** The toolbar
     button or `S` calls `canvas.toBlob` and downloads
@@ -335,7 +342,7 @@ lookupLevel(table: BlaTable, m: number, deltaAbs2: number): number
 nodeOffset(table: BlaTable, k: number, m: number): number
       // index into nodes of that node's five doubles
 toBlaMeta(table: BlaTable, buffer: SharedArrayBuffer): SharedBlaMeta
-fromBlaMeta(meta: SharedBlaMeta, refLength: number): BlaTable
+fromBlaMeta(meta: SharedBlaMeta): BlaTable   // offsets recomputed from meta.length
 ```
 
 **Per-pixel iteration** (`perturb.ts`).
@@ -350,7 +357,8 @@ interface TileJob {
 }
 iteratePixel(ref, bla: BlaTable | null, d0re, d0im, maxIter): number   // ν or −1
 renderTile(ref, bla: BlaTable | null, job: TileJob, out: Float32Array): void
-perturbStats: { steps: number; skips: number }   // counters for tests and the readout
+perturbStats: { steps: number; skips: number }
+   // worker-scoped counters used by the tests; not visible to the main thread
 ```
 
 **Plain oracle** (`mandelbrot.ts`).
@@ -380,7 +388,7 @@ type FromRenderWorker =
 
 interface SharedRefMeta { buffer: SharedArrayBuffer; length: number; capacity: number;
                           escaped: boolean; centre: BigComplex; bits: number }
-interface SharedBlaMeta { buffer: SharedArrayBuffer; levels: number;
+interface SharedBlaMeta { buffer: SharedArrayBuffer; levels: number; length: number;
                           delta0Max: number }
 ```
 
@@ -392,6 +400,7 @@ no tile outstanding, and drops results whose `job.generation` is stale.
 ```ts
 createHistory(onExternalChange: (hash: string) => void): {
   write(hash: string, mode: 'replace' | 'push'): void;   // records own writes
+  current(): string;
   dispose(): void;
 }
 ```
@@ -470,8 +479,11 @@ Automated checks, all passing:
 - `npm run lint`, `npm test`, `npm run build`, `npm run test:e2e`.
 - Unit tests include: over a frame at zoom exponent 8 in an exterior region
   where every pixel escapes within thirty iterations, the perturbation
-  renderer agrees with the plain double-precision oracle within 10⁻⁶ in `ν`
-  at every pixel; individual quickly-escaping points agree within 10⁻⁶,
+  renderer agrees with the plain double-precision oracle within 10⁻⁴ in `ν`
+  across the frame, the looser bound reflecting that rendered results are
+  stored as Float32, while the frame's four corners are checked against the
+  double-precision path within 10⁻⁹; individual quickly-escaping points
+  agree within 10⁻⁶,
   including against a reference that escapes early and against a two-entry
   reference that forces the last-entry rebase every iteration; an off-axis
   frame at zoom exponent 1 pins the vertical direction;
@@ -480,10 +492,12 @@ Automated checks, all passing:
   periodic expanding orbit of c = i the composite radius equals
   (ε − |δ₀|max)/(2√2) at level 1, radii shrink with level and vanish where
   the δ₀ term dominates, and the lookup stops below the alignment cap; at
-  zoom exponent 40 a deep frame renders identically with and without the
-  table; at zoom exponent 12 in the seahorse valley the table's agreement
-  with plain perturbation is no worse than plain perturbation's agreement
-  with itself under an ε-relative scaling of every δ₀, which is the honest
+  zoom exponent 40 a deep frame renders within 10⁻³ of the same values with
+  and without the table; at zoom exponent 12 in the seahorse valley the
+  table's agreement with plain perturbation is no worse than plain
+  perturbation's agreement with itself under a uniform ε-relative
+  translation of the frame's origin, an input perturbation of the same
+  order as the table's approximation error, which is the honest
   bound in a region where every pixel is near the boundary;
   `zoomAbout` leaves the point under the cursor fixed and
   respects the zoom-out limit; `autoMaxIter` is clamped at both ends;

@@ -10,11 +10,13 @@ import { defaultView, halfDiagonal, pan, zoomAbout } from '../src/viewport';
 class FakeWorker implements WorkerLike {
   posted: unknown[] = [];
   onmessage: ((ev: { data: unknown }) => void) | null = null;
+  onerror: ((ev: unknown) => void) | null = null;
   terminated = false;
   answered = 0;
   postMessage(message: unknown): void { this.posted.push(message); }
   terminate(): void { this.terminated = true; }
   receive(data: unknown): void { this.onmessage?.({ data }); }
+  fail(message: string): void { this.onerror?.({ message }); }
   tiles(): ToRenderWorker[] {
     return (this.posted as ToRenderWorker[]).filter((m) => m.type === 'tile');
   }
@@ -57,6 +59,7 @@ function setup(poolSize = 2) {
   const passes: PassResult[] = [];
   const progress: [number, number][] = [];
   const counts = { starts: 0, dones: 0 };
+  const errors: string[] = [];
   const scheduler = new Scheduler(
     {
       poolSize,
@@ -69,6 +72,7 @@ function setup(poolSize = 2) {
       onReferenceStart: () => { counts.starts++; },
       onReferenceProgress: (d, t) => progress.push([d, t]),
       onReferenceDone: () => { counts.dones++; },
+      onError: (message) => errors.push(message),
     },
   );
   let lastDone: { ref: SharedRefMeta } | undefined;
@@ -87,7 +91,7 @@ function setup(poolSize = 2) {
     }
     throw new Error('drain did not settle');
   };
-  return { scheduler, renders, refs, passes, progress, counts, completeReference, drain };
+  return { scheduler, renders, refs, passes, progress, counts, errors, completeReference, drain };
 }
 
 describe('Scheduler', () => {
@@ -223,12 +227,15 @@ describe('Scheduler', () => {
     expect(s.refs[0].terminated).toBe(true);
     expect(s.refs).toHaveLength(2);
     s.refs[0].receive({ type: 'done', id: abandoned.id, ...fakeDone(abandoned) });
-    expect(s.counts.dones).toBe(1);
+    // cancelPending() already balanced this abandoned request's start with a done; the stale
+    // message above is ignored because `pending` is null by the time it arrives.
+    expect(s.counts.dones).toBe(2);
     s.drain();
     expect(s.passes.map((p) => p.generation)).toEqual([3, 3, 3, 3]);
     expect(s.passes[3].values.every((v) => v === 1)).toBe(true);
     const gen3Tiles = s.renders.flatMap((r) => r.tiles()).filter((t) => t.type === 'tile' && t.job.generation === 3);
     expect(gen3Tiles).toHaveLength(5);
+    expect(s.counts.dones).toBe(s.counts.starts);
   });
 
   it('shares the BLA table alongside the reference', () => {
@@ -281,6 +288,7 @@ describe('Scheduler', () => {
     s.refs[0].receive({ type: 'done', id: rebuild.id, ...fakeDone(rebuild, { ref: fakeDone(s.refs[0].computes()[0]).ref }) });
     expect(s.counts.dones).toBe(donesBefore);
     expect(s.refs[0].terminated).toBe(false);
+    expect(s.counts.dones).toBe(s.counts.starts);
   });
 
   it('recomputes instead of rebuilding when the reference worker was recreated and holds nothing', () => {
@@ -344,6 +352,36 @@ describe('Scheduler', () => {
     s.refs[0].receive({ type: 'progress', id, done: 4096, total: 8192 });
     s.refs[0].receive({ type: 'progress', id: 999, done: 1, total: 2 });
     expect(s.progress).toEqual([[4096, 8192]]);
+  });
+
+  it('retries a tile once when a render worker throws', () => {
+    const s = setup();
+    s.scheduler.render(defaultView(W), target);
+    s.completeReference();
+    const before = s.renders.length;
+    s.renders[0].fail('boom');
+    expect(s.renders[0].terminated).toBe(true);
+    expect(s.renders).toHaveLength(before + 1);
+    const replacement = s.renders[s.renders.length - 1];
+    expect((replacement.posted[0] as ToRenderWorker).type).toBe('setShared');
+    s.drain();
+    expect(s.passes).toHaveLength(4);
+    expect(s.passes[3].values.every((v) => v === 1)).toBe(true);
+    expect(s.errors).toEqual([]);
+  });
+
+  it('clears the pending request and reports when the reference worker throws', () => {
+    const s = setup();
+    const view = defaultView(W);
+    s.scheduler.render(view, target);
+    s.refs[0].fail('no SharedArrayBuffer');
+    expect(s.refs[0].terminated).toBe(true);
+    expect(s.refs).toHaveLength(2);
+    expect(s.counts.dones).toBe(s.counts.starts);
+    expect(s.errors[0]).toContain('reference worker failed');
+    s.scheduler.render(view, target);
+    const last = s.refs[1].posted[s.refs[1].posted.length - 1] as ToReferenceWorker;
+    expect(last.type).toBe('compute');
   });
 
   it('dispose terminates every worker', () => {

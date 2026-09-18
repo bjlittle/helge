@@ -5,7 +5,7 @@
 One-time setup: `npm install` then `npx playwright install chromium`.
 
 - `npm run lint` — `eslint . && tsc --noEmit`. Healthy: no output, exit 0.
-- `npm test` — `vitest run`. Healthy: `Test Files  13 passed (13)` and `Tests  110 passed (110)`.
+- `npm test` — `vitest run`. Healthy: `Test Files  13 passed (13)` and `Tests  113 passed (113)`.
 - `npm run build` — `vite build`. Healthy: `✓ built in …` and a `dist/` listing including `render-worker` and `reference-worker` assets.
 - `npm run test:e2e` — `playwright test`; starts the dev server itself. Healthy: `10 passed`.
 - `npm run dev` — the static localhost at `http://localhost:5173/` with the cross-origin isolation headers the app needs.
@@ -32,7 +32,10 @@ frame during gestures. Start reading at `spec.md`, then `main.ts`, then `schedul
 
 ## Things the agent gets wrong
 
-Add a line the second time an agent makes the same mistake.
+Assigning a DOM `Worker` to the scheduler's `WorkerLike` fails under strictFunctionTypes; keep the
+`asWorkerLike` cast in `main.ts`.
+`CanvasView.paint` takes `Uint8ClampedArray<ArrayBuffer>` because TypeScript 5.9's typed-array
+generics default to `ArrayBufferLike`, which `ImageData` rejects.
 
 ## Lifecycle
 

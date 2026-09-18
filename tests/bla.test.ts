@@ -232,3 +232,26 @@ describe('radius rule under an expanding reference', () => {
     expect(radii[k]).toBe(0);
   });
 });
+
+describe('overflowing amplification', () => {
+  // Z[0] = 0, Z[1..7] = 1, Z[8..15] = 1e200: the level-1 node over Z[8],Z[9] already has
+  // A = (2e200)^2 = Infinity, with a finite radius; the level-2 node over 8..11 composes two
+  // such nodes, so A and B are infinite there too, and its radius clamps to 0 through the
+  // ordinary min/max clamp (finite / Infinity = 0). The level-3 node over 8..15 then composes
+  // two infinite-radius-0 children, so its bound is (0 − Infinity·δ₀max) / Infinity = −∞/∞ = NaN,
+  // which only the Number.isFinite guard in `merge` turns into a stored radius of 0.
+  it('stores radius 0, not NaN, when a composite bound overflows', () => {
+    const length = 16;
+    const z = new Float64Array(2 * length);
+    for (let l = 1; l <= 7; l++) z[2 * l] = 1;
+    for (let l = 8; l <= 15; l++) z[2 * l] = 1e200;
+    const ref: ReferenceOrbit = {
+      z, length, capacity: length, escaped: false, centre: cfromNumbers(0, 0, 128), bits: 128,
+    };
+    const table = makeTable(ref, 1e-12);
+    expect(table.nodes[nodeOffset(table, 2, 8)]).toBe(Infinity);
+    const r = table.nodes[nodeOffset(table, 3, 8) + 4];
+    expect(r).toBe(0);
+    expect(Number.isNaN(r)).toBe(false);
+  });
+});

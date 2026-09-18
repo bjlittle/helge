@@ -19,6 +19,7 @@ export interface Ui {
   setProgress(done: number, total: number): void;
   clearProgress(): void;
   setRenderTime(ms: number): void;
+  setStatus(text: string): void;
   toggleHelp(): void;
   closeHelp(): void;
 }
@@ -65,7 +66,7 @@ export function createUi(root: HTMLElement, palettes: readonly Palette[], cb: Ui
       </div>
     </div>
     <div class="readout">
-      <span id="centre"></span> · zoom 10<sup id="zoom"></sup> · <span id="ceiling"></span> iterations · <span id="time"></span>
+      <span id="centre"></span> · zoom 10<sup id="zoom"></sup> · <span id="ceiling"></span> iterations · <span id="time"></span> · <span id="status"></span>
     </div>
     <div class="progress" id="progress" hidden><div id="progress-bar"></div></div>
     <div class="help" id="help-overlay" hidden>
@@ -89,6 +90,7 @@ export function createUi(root: HTMLElement, palettes: readonly Palette[], cb: Ui
   const zoom = byId<HTMLElement>('zoom');
   const ceiling = byId<HTMLSpanElement>('ceiling');
   const time = byId<HTMLSpanElement>('time');
+  const status = byId<HTMLSpanElement>('status');
   const progress = byId<HTMLDivElement>('progress');
   const bar = byId<HTMLDivElement>('progress-bar');
   const helpOverlay = byId<HTMLDivElement>('help-overlay');
@@ -128,6 +130,9 @@ export function createUi(root: HTMLElement, palettes: readonly Palette[], cb: Ui
     },
     setRenderTime(ms) {
       time.textContent = ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`;
+    },
+    setStatus(text) {
+      status.textContent = text;
     },
     toggleHelp() {
       helpOverlay.hidden = !helpOverlay.hidden;

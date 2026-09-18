@@ -9,6 +9,7 @@ import {
 export interface WorkerLike {
   postMessage(message: unknown, transfer?: Transferable[]): void;
   onmessage: ((ev: { data: unknown }) => void) | null;
+  onerror: ((ev: unknown) => void) | null;
   terminate(): void;
 }
 
@@ -45,6 +46,7 @@ export interface SchedulerEvents {
   onReferenceStart(): void;
   onReferenceProgress(done: number, total: number): void;
   onReferenceDone(): void;
+  onError(message: string): void;
 }
 
 export interface SchedulerOptions {
@@ -61,6 +63,13 @@ export const DELTA0_HEADROOM = 2;
 
 function sameCentre(a: BigComplex | null, b: BigComplex): boolean {
   return a !== null && a.re.bits === b.re.bits && a.re.m === b.re.m && a.im.m === b.im.m;
+}
+
+function describeError(ev: unknown): string {
+  if (ev !== null && typeof ev === 'object' && 'message' in ev && typeof (ev as { message: unknown }).message === 'string') {
+    return (ev as { message: string }).message;
+  }
+  return String(ev);
 }
 
 interface PendingReference {
@@ -84,6 +93,7 @@ interface PassState {
 interface Slot {
   worker: WorkerLike;
   busy: boolean;
+  job: TileJob | null;
 }
 
 export class Scheduler {
@@ -101,6 +111,7 @@ export class Scheduler {
   /** Centre of the reference the current reference-worker instance holds, or will hold once its posted compute finishes. */
   private workerHolds: BigComplex | null = null;
   private nextId = 1;
+  private renderErrors = 0;
   private view: ViewState | null = null;
   private target: RenderTarget | null = null;
   private startedAt = 0;
@@ -122,6 +133,7 @@ export class Scheduler {
     this.passes.clear();
     this.completed.clear();
     this.nextPass = 0;
+    this.renderErrors = 0;
     this.view = view;
     this.target = target;
     this.startedAt = this.now();
@@ -167,18 +179,52 @@ export class Scheduler {
     this.refWorker.terminate();
   }
 
+  private wireSlot(slot: Slot): void {
+    slot.worker.onmessage = (ev) => this.onRenderMessage(slot, ev.data as FromRenderWorker);
+    slot.worker.onerror = (ev) => this.onRenderError(slot, ev);
+  }
+
   private createSlot(): Slot {
-    const worker = this.options.createRenderWorker();
-    const slot: Slot = { worker, busy: false };
-    worker.onmessage = (ev) => this.onRenderMessage(slot, ev.data as FromRenderWorker);
+    const slot: Slot = { worker: this.options.createRenderWorker(), busy: false, job: null };
+    this.wireSlot(slot);
     return slot;
+  }
+
+  private onRenderError(slot: Slot, ev: unknown): void {
+    const job = slot.job;
+    slot.job = null;
+    slot.busy = false;
+    slot.worker.terminate();
+    slot.worker = this.options.createRenderWorker();
+    this.wireSlot(slot);
+    if (this.ref) {
+      const shared: ToRenderWorker = { type: 'setShared', ref: this.ref, bla: this.bla };
+      slot.worker.postMessage(shared);
+    }
+    this.renderErrors++;
+    if (job && job.generation === this.generation && this.renderErrors <= this.slots.length) {
+      this.queue.unshift(job);
+    } else {
+      this.events.onError(`render worker failed: ${describeError(ev)}`);
+    }
+    this.dispatch();
   }
 
   private createReferenceWorker(): WorkerLike {
     const worker = this.options.createReferenceWorker();
     worker.onmessage = (ev) => this.onReferenceMessage(ev.data as FromReferenceWorker);
+    worker.onerror = (ev) => this.onReferenceError(ev);
     this.workerHolds = null;
     return worker;
+  }
+
+  private onReferenceError(ev: unknown): void {
+    const hadPending = this.pending !== null;
+    this.pending = null;
+    this.refWorker.terminate();
+    this.refWorker = this.createReferenceWorker();
+    if (hadPending) this.events.onReferenceDone();
+    this.events.onError(`reference worker failed: ${describeError(ev)}`);
   }
 
   private reusable(
@@ -202,6 +248,7 @@ export class Scheduler {
       this.refWorker = this.createReferenceWorker();
     }
     this.pending = null;
+    this.events.onReferenceDone();
   }
 
   private requestReference(centre: BigComplex, length: number, bits: number, delta0Max: number): void {
@@ -280,12 +327,14 @@ export class Scheduler {
       const job = this.queue.shift();
       if (!job) return;
       slot.busy = true;
+      slot.job = job;
       const msg: ToRenderWorker = { type: 'tile', job };
       slot.worker.postMessage(msg);
     }
   }
 
   private onRenderMessage(slot: Slot, msg: FromRenderWorker): void {
+    slot.job = null;
     slot.busy = false;
     if (msg.type === 'tile' && msg.job.generation === this.generation) {
       const state = this.passes.get(msg.job.pass);
