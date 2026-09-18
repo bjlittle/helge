@@ -82,12 +82,17 @@ Carried forward:
   hot-loop micro-costs, dead clamps, unpinned constants in tests.
 - **Commit `ac6e529` carries its attribution trailer on the subject line.**
   Rewriting it is the owner's call and nobody has made it.
-- **The verification commands are invisible to the gate.** The design's flagged
-  concerns record the owner approving the agent to fill `.gravity/verification.md`,
-  and the build did fill it — as a table. `scripts/sdlc` looks for lines
-  beginning with `- `, so `sdlc doctor` still warns that no verification
-  commands are recorded. Resolved for a reader, unresolved for the tooling,
-  with lifecycle gates enforced.
+- **The verification commands were invisible to the gate.** ~~The design's
+  flagged concerns record the owner approving the agent to fill
+  `.gravity/verification.md`, and the build did fill it — as a table.
+  `scripts/sdlc` looks for lines beginning with `- `, so `sdlc doctor` still
+  warns that no verification commands are recorded.~~ Closed on 2026-09-18: the
+  file is a list again, the empty `verify_*` copier answers are filled so a
+  template update cannot quietly undo it, and `sdlc doctor` is clean. The
+  design's flagged-concerns row now distinguishes resolved for a reader from
+  resolved for the gate. The coupling itself is upstream, and is filed as
+  MetOffice/ai-native-sdlc#29; until that lands, this repository's list format
+  is load-bearing and the note in `.gravity/verification.md` says so.
 
 ## Lessons
 
