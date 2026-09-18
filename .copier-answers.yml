@@ -11,7 +11,7 @@ hosts:
 - copilot
 intent_path: docs/changes/{date}-{slug}/intent.md
 plan_path: docs/changes/{date}-{slug}/plan.md
-project_name: project-wibble
+project_name: helge
 spec_path: docs/changes/{date}-{slug}/spec.md
 verify_build: ''
 verify_lint: ''
