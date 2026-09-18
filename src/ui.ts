@@ -48,14 +48,14 @@ export function createUi(root: HTMLElement, palettes: readonly Palette[], cb: Ui
         <select id="palette">${palettes.map((p) => `<option value="${p.id}">${p.name}</option>`).join('')}</select>
       </label>
       <label>Density
-        <input id="density" type="range" min="${Math.log10(DENSITY_MIN)}" max="${Math.log10(DENSITY_MAX)}" step="0.01">
+        <input id="density" type="range" min="${Math.log10(DENSITY_MIN)}" max="${Math.log10(DENSITY_MAX)}" step="any">
       </label>
       <label>Offset
         <input id="offset" type="range" min="0" max="1" step="0.001">
       </label>
       <label><input id="auto" type="checkbox"> Auto iterations</label>
       <label>Iterations
-        <input id="iters" type="range" min="${Math.log2(MIN_ITER)}" max="${Math.log2(MAX_ITER)}" step="0.01">
+        <input id="iters" type="range" min="${Math.log2(MIN_ITER)}" max="${Math.log2(MAX_ITER)}" step="any">
         <span id="iters-value"></span>
       </label>
       <div class="buttons">
