@@ -9,7 +9,7 @@ One-time setup: `npm install` then `npx playwright install chromium`.
 | Command | What it runs | Healthy output |
 |---|---|---|
 | `npm run lint` | `eslint . && tsc --noEmit` | nothing, exit 0 |
-| `npm test` | `vitest run` | `Test Files  13 passed (13)`, `Tests  113 passed (113)` |
+| `npm test` | `vitest run` | `Test Files  13 passed (13)`, `Tests  115 passed (115)` |
 | `npm run build` | `vite build` | `✓ built in …` with a `dist/` listing |
 | `npm run test:e2e` | `playwright test` against the dev server it starts | `10 passed` |
 

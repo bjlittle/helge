@@ -5,7 +5,7 @@
 One-time setup: `npm install` then `npx playwright install chromium`.
 
 - `npm run lint` — `eslint . && tsc --noEmit`. Healthy: no output, exit 0.
-- `npm test` — `vitest run`. Healthy: `Test Files  13 passed (13)` and `Tests  113 passed (113)`.
+- `npm test` — `vitest run`. Healthy: `Test Files  13 passed (13)` and `Tests  115 passed (115)`.
 - `npm run build` — `vite build`. Healthy: `✓ built in …` and a `dist/` listing including `render-worker` and `reference-worker` assets.
 - `npm run test:e2e` — `playwright test`; starts the dev server itself. Healthy: `10 passed`.
 - `npm run dev` — the static localhost at `http://localhost:5173/` with the cross-origin isolation headers the app needs.
