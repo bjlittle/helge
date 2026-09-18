@@ -201,6 +201,25 @@ describe('Scheduler', () => {
     }
   });
 
+  it('cancels an outstanding reference request when the held reference is reusable again', () => {
+    const s = setup();
+    const view = defaultView(W);
+    s.scheduler.render(view, target);
+    s.completeReference();
+    s.scheduler.render(pan(view, 10000, 0), target);
+    const abandoned = s.refs[0].computes()[1];
+    s.scheduler.render(view, target);
+    expect(s.refs[0].terminated).toBe(true);
+    expect(s.refs).toHaveLength(2);
+    s.refs[0].receive({ type: 'done', id: abandoned.id, ref: fakeRef(abandoned) });
+    expect(s.counts.dones).toBe(1);
+    s.drain();
+    expect(s.passes.map((p) => p.generation)).toEqual([3, 3, 3, 3]);
+    expect(s.passes[3].values.every((v) => v === 1)).toBe(true);
+    const gen3Tiles = s.renders.flatMap((r) => r.tiles()).filter((t) => t.type === 'tile' && t.job.generation === 3);
+    expect(gen3Tiles).toHaveLength(5);
+  });
+
   it('forwards progress for the current id and ignores stale ids', () => {
     const s = setup();
     s.scheduler.render(defaultView(W), target);

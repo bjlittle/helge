@@ -119,6 +119,7 @@ export class Scheduler {
     const bits = precisionBits(view.scale);
     const half = halfDiagonal(view, target.widthCss, target.heightCss);
     if (this.ref && this.reusable(this.ref.centre, this.ref.capacity, this.ref.bits, view, need, bits, half)) {
+      this.cancelPending();
       this.startPasses();
       return;
     }
@@ -154,11 +155,16 @@ export class Scheduler {
     return Math.hypot(d.re, d.im) <= REUSE_RADIUS * half && need <= capacity && bits >= needBits;
   }
 
+  /** Abandons an in-flight reference request so its late result cannot restart passes mid-generation. */
+  private cancelPending(): void {
+    if (!this.pending) return;
+    this.refWorker.terminate();
+    this.refWorker = this.createReferenceWorker();
+    this.pending = null;
+  }
+
   private requestReference(centre: BigComplex, length: number, bits: number, delta0Max: number): void {
-    if (this.pending) {
-      this.refWorker.terminate();
-      this.refWorker = this.createReferenceWorker();
-    }
+    this.cancelPending();
     const id = this.nextId++;
     this.pending = { id, centre, length, bits };
     this.events.onReferenceStart();
