@@ -370,6 +370,33 @@ describe('Scheduler', () => {
     expect(s.errors).toEqual([]);
   });
 
+  it('does not requeue a tile that has already been retried', () => {
+    const s = setup();
+    s.scheduler.render(defaultView(W), target);
+    s.completeReference();
+    s.renders[0].fail('boom');
+    const retryWorker = s.renders[s.renders.length - 1];
+    retryWorker.fail('boom again');
+    const postings = s.renders.flatMap((r) => r.tiles()).filter((m) => m.type === 'tile' && m.job.pass === 0);
+    expect(postings).toHaveLength(2);
+    expect(s.errors).toHaveLength(1);
+    expect(s.errors[0]).toContain('render worker failed');
+  });
+
+  it('retries a tile that has not failed before, however many other tiles failed earlier', () => {
+    const s = setup();
+    s.scheduler.render(defaultView(W), target);
+    s.completeReference();
+    s.renders[0].fail('boom');
+    s.renders[1].fail('boom');
+    s.renders[2].answerOne();
+    s.renders[2].fail('boom');
+    expect(s.errors).toEqual([]);
+    s.drain();
+    expect(s.passes).toHaveLength(4);
+    expect(s.passes[3].values.every((v) => v === 1)).toBe(true);
+  });
+
   it('clears the pending request and reports when the reference worker throws', () => {
     const s = setup();
     const view = defaultView(W);

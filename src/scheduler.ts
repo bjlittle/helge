@@ -65,6 +65,10 @@ function sameCentre(a: BigComplex | null, b: BigComplex): boolean {
   return a !== null && a.re.bits === b.re.bits && a.re.m === b.re.m && a.im.m === b.im.m;
 }
 
+function tileKey(job: TileJob): string {
+  return `${job.generation}:${job.pass}:${job.x}:${job.y}`;
+}
+
 function describeError(ev: unknown): string {
   if (ev !== null && typeof ev === 'object' && 'message' in ev && typeof (ev as { message: unknown }).message === 'string') {
     return (ev as { message: string }).message;
@@ -111,7 +115,8 @@ export class Scheduler {
   /** Centre of the reference the current reference-worker instance holds, or will hold once its posted compute finishes. */
   private workerHolds: BigComplex | null = null;
   private nextId = 1;
-  private renderErrors = 0;
+  /** Keys of tiles already requeued after a worker error, so each is retried at most once. */
+  private readonly retried = new Set<string>();
   private view: ViewState | null = null;
   private target: RenderTarget | null = null;
   private startedAt = 0;
@@ -133,7 +138,7 @@ export class Scheduler {
     this.passes.clear();
     this.completed.clear();
     this.nextPass = 0;
-    this.renderErrors = 0;
+    this.retried.clear();
     this.view = view;
     this.target = target;
     this.startedAt = this.now();
@@ -201,8 +206,8 @@ export class Scheduler {
       const shared: ToRenderWorker = { type: 'setShared', ref: this.ref, bla: this.bla };
       slot.worker.postMessage(shared);
     }
-    this.renderErrors++;
-    if (job && job.generation === this.generation && this.renderErrors <= this.slots.length) {
+    if (job && job.generation === this.generation && !this.retried.has(tileKey(job))) {
+      this.retried.add(tileKey(job));
       this.queue.unshift(job);
     } else {
       this.events.onError(`render worker failed: ${describeError(ev)}`);
@@ -300,6 +305,7 @@ export class Scheduler {
     this.passes.clear();
     this.completed.clear();
     this.nextPass = 0;
+    this.retried.clear();
     this.passCount = strides.length;
     strides.forEach((stepCss, pass) => {
       const width = Math.ceil(target.widthCss / stepCss);
