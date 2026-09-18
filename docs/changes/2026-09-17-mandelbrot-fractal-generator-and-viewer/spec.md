@@ -47,7 +47,9 @@ carries no policy overlays beyond the repository's own lifecycle rules.
    `r = min(r_x, max(0, (r_y − |B_x|·|δ₀|max) / |A_x|))`, and levels 1 and up
    are stored. At iteration `n` with offset `δ`, the pixel takes the largest
    stored node starting at `n` whose radius exceeds `|δ|`, or a single
-   perturbation step if none qualifies. Without BLA a frame at a deep
+   perturbation step if none qualifies. A node whose composite bound is not
+   finite, because the amplification of an expanding orbit has overflowed,
+   stores radius 0 and is never applied. Without BLA a frame at a deep
    minibrot needing a hundred thousand iterations per pixel takes minutes;
    with it, seconds. This is the largest and riskiest piece of work.
 
@@ -66,6 +68,10 @@ carries no policy overlays beyond the repository's own lifecycle rules.
    flight, the scheduler terminates the reference worker and starts a fresh
    one, which is the only reliable way to abandon BigInt work promptly. The
    render pool has `navigator.hardwareConcurrency − 1` workers, minimum 1.
+   A worker error is reported in the readout; a render tile whose worker
+   threw is retried once on a replacement worker, and a failed reference
+   request clears the progress indicator. A page opened without
+   cross-origin isolation shows a message instead of a black canvas.
 
 7. **Reference orbit and BLA table in SharedArrayBuffers.** All render
    workers read one copy instead of each holding their own. Chrome only
@@ -85,7 +91,11 @@ carries no policy overlays beyond the repository's own lifecycle rules.
    `ref.bits ≥ precisionBits(view.scale)`. The BLA
    table is rebuilt, in the reference worker, when a view's `|δ₀|max` exceeds
    the bound the table was built for. Small pans and zooms therefore
-   recompute pixels only.
+   recompute pixels only. The scheduler also tracks which reference the
+   current reference-worker instance holds; it requests a table rebuild only
+   when that matches the reference being rebuilt for, and otherwise requests
+   a fresh reference at the view centre, so a rebuild can never be answered
+   from a different reference or sent to a worker that holds nothing.
 
 9. **Scheduler-owned queue, one tile per idle worker.** Worker message queues
    are first-in first-out, so a cancel message posted behind a batch of
@@ -102,9 +112,12 @@ carries no policy overlays beyond the repository's own lifecycle rules.
     The scheduler renders passes at strides 8, 4, 2 and 1 CSS pixels, and a
     final pass at the device pixel ratio when it exceeds 1, splitting each
     pass into 64×64 tiles. Tile results carrying a stale generation are
-    discarded on arrival. Each pass is painted as it completes. Passes
-    recompute every pixel; the redundancy is about one third of the final
-    pass and is accepted for simplicity.
+    discarded on arrival. Passes are delivered and painted strictly in
+    stride order; a finer pass that finishes before a coarser one waits, so
+    refinement never regresses, and `final` marks the last pass rather than
+    whichever pass happened to finish last. Passes recompute every pixel;
+    the redundancy is about one third of the final pass and is accepted for
+    simplicity.
 
 11. **Workers return smooth iteration values, not colours.** Each pixel's
     result is a smooth escape-time value `ν = n − log₂(ln|z[n]| / ln R)` with
@@ -141,7 +154,9 @@ carries no policy overlays beyond the repository's own lifecycle rules.
     the hash it wrote and ignores any `hashchange` that matches it. An empty
     or invalid hash arriving from the back button means the default view. `fromHash` validates every field and returns `null`, falling back
     to `DEFAULT_VIEW`, when any is missing or out of range. The hash grows to
-    a few hundred characters at extreme depth, which is acceptable.
+    a few hundred characters at extreme depth, which is acceptable. A hash
+    whose scale is beyond the zoom-out limit is clamped to that limit on
+    load.
 
 15. **Default view is numeric.** `DEFAULT_VIEW` is centre `−0.5 + 0i`,
     `scale = 4 / widthCss`, `maxIter: 'auto'`, palette `classic`,
@@ -154,7 +169,10 @@ carries no policy overlays beyond the repository's own lifecycle rules.
     Ctrl+wheel pinch at the same rate. Pointer drag pans. Double-click zooms
     in by 2 about the point. Keys: arrows pan by a tenth of the viewport,
     `+` and `−` zoom by 2 about the centre, `R` resets to the default view,
-    `S` saves, `?` toggles the help overlay, `Esc` closes it.
+    `S` saves, `?` toggles the help overlay, `Esc` closes it. Key presses
+    with Ctrl, Meta or Alt held are left to the browser, and a focused
+    toolbar button does not suppress shortcuts; form controls that take
+    keyboard input (text fields, selects, sliders) do.
 
 17. **Save is a PNG of the canvas at the rendered resolution.** The toolbar
     button or `S` calls `canvas.toBlob` and downloads
@@ -164,10 +182,12 @@ carries no policy overlays beyond the repository's own lifecycle rules.
 
 18. **Toolbar and readout.** A compact overlay holds: palette select, density
     and offset sliders, iteration slider with an automatic toggle, reset,
-    save and help buttons. A readout shows centre (truncated to 12
-    significant digits), zoom as a power of ten, iteration ceiling and last
-    render time. A progress bar appears while a reference orbit is being
-    computed. The help overlay lists the input mapping.
+    save and help buttons. The density and iteration sliders are logarithmic
+    with no step lattice, so any value on the log scale is representable. A
+    readout shows centre (truncated to 12 significant digits), zoom as a
+    power of ten, iteration ceiling and last render time. A progress bar
+    appears while a reference orbit is being computed. The help overlay
+    lists the input mapping.
 
 19. **A plain double-precision renderer is kept as the test oracle, compared
     only where comparison is meaningful.** A pixel escaping at iteration `n`
@@ -322,7 +342,7 @@ lookupLevel(table: BlaTable, m: number, deltaAbs2: number): number
 nodeOffset(table: BlaTable, k: number, m: number): number
       // index into nodes of that node's five doubles
 toBlaMeta(table: BlaTable, buffer: SharedArrayBuffer): SharedBlaMeta
-fromBlaMeta(meta: SharedBlaMeta, refLength: number): BlaTable
+fromBlaMeta(meta: SharedBlaMeta): BlaTable   // offsets recomputed from meta.length
 ```
 
 **Per-pixel iteration** (`perturb.ts`).
@@ -337,7 +357,8 @@ interface TileJob {
 }
 iteratePixel(ref, bla: BlaTable | null, d0re, d0im, maxIter): number   // ν or −1
 renderTile(ref, bla: BlaTable | null, job: TileJob, out: Float32Array): void
-perturbStats: { steps: number; skips: number }   // counters for tests and the readout
+perturbStats: { steps: number; skips: number }
+   // worker-scoped counters used by the tests; not visible to the main thread
 ```
 
 **Plain oracle** (`mandelbrot.ts`).
@@ -367,7 +388,7 @@ type FromRenderWorker =
 
 interface SharedRefMeta { buffer: SharedArrayBuffer; length: number; capacity: number;
                           escaped: boolean; centre: BigComplex; bits: number }
-interface SharedBlaMeta { buffer: SharedArrayBuffer; levels: number;
+interface SharedBlaMeta { buffer: SharedArrayBuffer; levels: number; length: number;
                           delta0Max: number }
 ```
 
@@ -379,6 +400,7 @@ no tile outstanding, and drops results whose `job.generation` is stale.
 ```ts
 createHistory(onExternalChange: (hash: string) => void): {
   write(hash: string, mode: 'replace' | 'push'): void;   // records own writes
+  current(): string;
   dispose(): void;
 }
 ```
@@ -457,17 +479,36 @@ Automated checks, all passing:
 - `npm run lint`, `npm test`, `npm run build`, `npm run test:e2e`.
 - Unit tests include: over a frame at zoom exponent 8 in an exterior region
   where every pixel escapes within thirty iterations, the perturbation
-  renderer agrees with the plain double-precision oracle within 10⁻⁶ in `ν`
-  at every pixel; individual quickly-escaping points, including ones whose
-  reference orbit escapes early and forces rebasing, agree within 10⁻⁶;
+  renderer agrees with the plain double-precision oracle within 10⁻⁴ in `ν`
+  across the frame, the looser bound reflecting that rendered results are
+  stored as Float32, while the frame's four corners are checked against the
+  double-precision path within 10⁻⁹; individual quickly-escaping points
+  agree within 10⁻⁶,
+  including against a reference that escapes early and against a two-entry
+  reference that forces the last-entry rebase every iteration; an off-axis
+  frame at zoom exponent 1 pins the vertical direction;
   BLA-skipped results agree with step-by-step perturbation to a relative
-  10⁻⁴ for random offsets inside each node's radius; `zoomAbout` leaves the point under the cursor fixed and
+  10⁻⁴ for random offsets inside each node's radius; under the exactly
+  periodic expanding orbit of c = i the composite radius equals
+  (ε − |δ₀|max)/(2√2) at level 1, radii shrink with level and vanish where
+  the δ₀ term dominates, and the lookup stops below the alignment cap; at
+  zoom exponent 40 a deep frame renders within 10⁻³ of the same values with
+  and without the table; at zoom exponent 12 in the seahorse valley the
+  table's agreement with plain perturbation is no worse than plain
+  perturbation's agreement with itself under a uniform ε-relative
+  translation of the frame's origin, an input perturbation of the same
+  order as the table's approximation error, which is the honest
+  bound in a region where every pixel is near the boundary;
+  `zoomAbout` leaves the point under the cursor fixed and
   respects the zoom-out limit; `autoMaxIter` is clamped at both ends;
   `toHash` and `fromHash` round-trip at 300 bits and `fromHash` rejects
   malformed, out-of-range and oversized input; `fromDecimal` and
   `toDecimal` round-trip; the scheduler posts at most one tile per worker,
-  clears its queue on a view change and discards stale tiles, using a fake
-  worker; `createHistory` ignores its own writes and forwards external ones;
+  clears its queue on a view change, discards stale tiles, delivers passes
+  in stride order, cancels an abandoned reference request when a held
+  reference is reused, rebuilds the table only from the reference the
+  worker holds and queues a rebuild behind a running compute, using fake
+  workers; `createHistory` ignores its own writes and forwards external ones;
   `colourise` output stays within bounds and is periodic in `offset`.
 - The Playwright spec loads the page, waits for a non-blank canvas, then:
   dispatches a wheel event and asserts the hash changed; drags and asserts
@@ -477,4 +518,4 @@ Automated checks, all passing:
 
 ## Status
 
-Living. Last confirmed current: 2026-09-17.
+Living. Last confirmed current: 2026-09-18.
