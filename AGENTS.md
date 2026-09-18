@@ -1,4 +1,4 @@
-# Agent instructions for project-wibble
+# Agent instructions for helge
 
 ## Commands
 

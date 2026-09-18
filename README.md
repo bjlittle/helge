@@ -1,7 +1,10 @@
-# wibble
+# helge
 
 A personal Mandelbrot fractal generator and viewer for Chrome, with zoom to extreme depth via
-perturbation and bilinear approximation.
+perturbation and bilinear approximation. Named for Niels Fabian Helge von Koch, whose snowflake
+encloses a finite area behind an infinite edge.
+
+![The Mandelbrot set in the default view](mandelbrot.png)
 
 ```bash
 npm install
