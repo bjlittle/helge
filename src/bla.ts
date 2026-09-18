@@ -66,7 +66,8 @@ function merge(
   out[o + 1] = yAre * xAim + yAim * xAre;
   out[o + 2] = yAre * xBre - yAim * xBim + yBre;
   out[o + 3] = yAre * xBim + yAim * xBre + yBim;
-  out[o + 4] = axAbs > 0 ? Math.min(xr, Math.max(0, (yr - bxAbs * d0max) / axAbs)) : 0;
+  const bound = (yr - bxAbs * d0max) / axAbs;
+  out[o + 4] = axAbs > 0 && Number.isFinite(bound) ? Math.min(xr, Math.max(0, bound)) : 0;
 }
 
 /** Builds the table for `ref` into `out`, which must hold blaNodeCount(ref.length) × NODE_DOUBLES doubles. */
