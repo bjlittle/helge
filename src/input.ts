@@ -21,7 +21,7 @@ export function wheelFactor(deltaY: number, deltaMode: number, viewportHeight: n
 
 function isFormField(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
-  return target.tagName === 'INPUT' || target.tagName === 'SELECT' || target.tagName === 'TEXTAREA' || target.tagName === 'BUTTON';
+  return target.tagName === 'INPUT' || target.tagName === 'SELECT' || target.tagName === 'TEXTAREA';
 }
 
 /** Wires wheel, pointer, double-click and keyboard input on `el` to `actions`. Returns a detach function. */
@@ -65,6 +65,7 @@ export function attachInput(el: HTMLElement, actions: InputActions): () => void 
     actions.gestureEnd();
   };
   const onKeyDown = (e: KeyboardEvent) => {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
     if (isFormField(e.target)) return;
     const r = el.getBoundingClientRect();
     const stepX = r.width / 10;
