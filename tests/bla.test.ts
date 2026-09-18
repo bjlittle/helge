@@ -184,3 +184,51 @@ describe('shared metadata', () => {
     expect(back.nodes.buffer).toBe(buffer);
   });
 });
+
+describe('radius rule under an expanding reference', () => {
+  // c = i is a Misiurewicz point: the orbit is exactly 0, i, −1+i, −i, −1+i, −i, …
+  // so |2Z| ≥ 2 forever and the composite radius is limited by the child bound, not by r_x.
+  const ref = makeRef(0, 1, 4096);
+  const d0max = 1e-12;
+  const table = makeTable(ref, d0max);
+
+  it('has an exactly periodic, non-escaping reference', () => {
+    expect(ref.escaped).toBe(false);
+    expect(ref.length).toBe(4096);
+    expect([ref.z[4], ref.z[5], ref.z[6], ref.z[7]]).toEqual([-1, 1, 0, -1]);
+  });
+
+  it('applies the child bound and the δ₀ subtraction at level 1', () => {
+    // node j = 1 covers iterations 2 and 3: x = Z[2] = −1+i, y = Z[3] = −i
+    const r = table.nodes[nodeOffset(table, 1, 2) + 4];
+    expect(r).toBeCloseTo((BLA_EPS - d0max) / (2 * Math.SQRT2), 20);
+  });
+
+  it('shrinks radii with level and never stores a negative radius', () => {
+    let binding = 0;
+    for (let k = 2; k <= table.levels; k++) {
+      for (let j = 0; j < levelCount(ref.length, k); j++) {
+        const m = j * 2 ** k;
+        const rx = table.nodes[nodeOffset(table, k - 1, m) + 4];
+        const r = table.nodes[nodeOffset(table, k, m) + 4];
+        expect(r).toBeGreaterThanOrEqual(0);
+        expect(r).toBeLessThanOrEqual(rx);
+        if (rx > 0 && r < rx) binding++;
+      }
+    }
+    expect(binding).toBeGreaterThan(100);
+  });
+
+  it('is radius-limited: lookupLevel stops below the alignment cap', () => {
+    const m = 1024;
+    const radii = Array.from({ length: 10 }, (_, i) => table.nodes[nodeOffset(table, i + 1, m) + 4]);
+    for (let i = 1; i < radii.length; i++) expect(radii[i]).toBeLessThanOrEqual(radii[i - 1]);
+    expect(radii[0]).toBeGreaterThan(0);
+    expect(radii[9]).toBe(0);
+    const k = lookupLevel(table, m, 0);
+    expect(k).toBeGreaterThanOrEqual(1);
+    expect(k).toBeLessThan(10);
+    expect(radii[k - 1]).toBeGreaterThan(0);
+    expect(radii[k]).toBe(0);
+  });
+});
