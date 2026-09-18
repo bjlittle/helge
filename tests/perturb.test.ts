@@ -22,7 +22,7 @@ describe('iteratePixel', () => {
       const expected = iterateDouble(cre, cim, 100);
       expect(expected).toBeGreaterThan(0);
       expect(expected).toBeLessThan(30);
-      const actual = iteratePixel(ref, cre - -0.1, cim - 0.75, 100);
+      const actual = iteratePixel(ref, null, cre - -0.1, cim - 0.75, 100);
       expect(Math.abs(actual - expected)).toBeLessThan(1e-6);
     }
   });
@@ -32,23 +32,23 @@ describe('iteratePixel', () => {
     expect(ref.escaped).toBe(true);
     expect(ref.length).toBe(6);
     const expected = iterateDouble(0.5, 0.5, 100);
-    const actual = iteratePixel(ref, 0.5 - 1, 0.5 - 0, 100);
+    const actual = iteratePixel(ref, null, 0.5 - 1, 0.5 - 0, 100);
     expect(Math.abs(actual - expected)).toBeLessThan(1e-6);
-    expect(iteratePixel(ref, -1 - 1, 0, 300)).toBe(-1);
+    expect(iteratePixel(ref, null, -1 - 1, 0, 300)).toBe(-1);
   });
 
   it('reports interior pixels as −1', () => {
     const ref = makeRef(-0.1, 0.75, 1024);
-    expect(iteratePixel(ref, 0, 0, 1000)).toBe(-1);
-    expect(iteratePixel(ref, 0.1, -0.75, 1000)).toBe(-1);
-    expect(iteratePixel(ref, -0.9, -0.75, 1000)).toBe(-1);
+    expect(iteratePixel(ref, null, 0, 0, 1000)).toBe(-1);
+    expect(iteratePixel(ref, null, 0.1, -0.75, 1000)).toBe(-1);
+    expect(iteratePixel(ref, null, -0.9, -0.75, 1000)).toBe(-1);
   });
 
   it('is exact for a tiny offset from an exterior reference', () => {
     const ref = makeRef(0.5, 0.5, 64);
     const d0 = 1e-9;
     const expected = iterateDouble(0.5 + d0, 0.5 - d0, 100);
-    expect(Math.abs(iteratePixel(ref, d0, -d0, 100) - expected)).toBeLessThan(1e-6);
+    expect(Math.abs(iteratePixel(ref, null, d0, -d0, 100) - expected)).toBeLessThan(1e-6);
   });
 
   it('rebases at the last reference entry with a two-entry reference', () => {
@@ -56,8 +56,8 @@ describe('iteratePixel', () => {
     expect(ref.length).toBe(2);
     expect(ref.escaped).toBe(false);
     const expected = iterateDouble(0.5, 0.5, 100);
-    expect(Math.abs(iteratePixel(ref, 0.5 - -0.5, 0.5 - 0, 100) - expected)).toBeLessThan(1e-6);
-    expect(iteratePixel(ref, 0.4, 0.75, 300)).toBe(-1);
+    expect(Math.abs(iteratePixel(ref, null, 0.5 - -0.5, 0.5 - 0, 100) - expected)).toBeLessThan(1e-6);
+    expect(iteratePixel(ref, null, 0.4, 0.75, 300)).toBe(-1);
   });
 });
 
@@ -72,7 +72,7 @@ describe('renderTile', () => {
       originRe: geo.originRe, originIm: geo.originIm, step: geo.step, maxIter: 1000,
     };
     const out = new Float32Array(32 * 32);
-    renderTile(ref, job, out);
+    renderTile(ref, null, job, out);
     const c = ctoNumbers(ref.centre);
     let checked = 0;
     for (let py = 0; py < 32; py++) {
@@ -96,7 +96,7 @@ describe('renderTile', () => {
     const geo = passGeometry(view, ref.centre, 8, W, W);
     const job: TileJob = { generation: 0, pass: 0, x: 0, y: 0, w: 32, h: 32, ...geo, maxIter: 1000 };
     const out = new Float32Array(32 * 32);
-    renderTile(ref, job, out);
+    renderTile(ref, null, job, out);
     let checked = 0;
     let asymmetric = 0;
     for (let py = 0; py < 32; py++) {
@@ -129,7 +129,7 @@ describe('renderTile', () => {
       originRe: geo.originRe, originIm: geo.originIm, step: geo.step, maxIter,
     };
     const out = new Float32Array(32 * 32);
-    renderTile(ref, job, out);
+    renderTile(ref, null, job, out);
     for (let py = 0; py < 32; py++) {
       for (let px = 0; px < 32; px++) {
         const expected = iterateDouble(0.5 + geo.originRe + px * geo.step, 0.5 + geo.originIm - py * geo.step, maxIter);
@@ -143,7 +143,7 @@ describe('renderTile', () => {
       const d0re = geo.originRe + px * geo.step;
       const d0im = geo.originIm - py * geo.step;
       const expected = iterateDouble(0.5 + d0re, 0.5 + d0im, maxIter);
-      expect(Math.abs(iteratePixel(ref, d0re, d0im, maxIter) - expected)).toBeLessThan(1e-9);
+      expect(Math.abs(iteratePixel(ref, null, d0re, d0im, maxIter) - expected)).toBeLessThan(1e-9);
       return expected;
     });
     expect(Math.abs(values[0] - values[3])).toBeGreaterThan(1e-8);
@@ -154,9 +154,9 @@ describe('renderTile', () => {
     const view = defaultView(256);
     const geo = passGeometry(view, ref.centre, 8, 256, 256);
     const whole = new Float32Array(32 * 32);
-    renderTile(ref, { generation: 0, pass: 0, x: 0, y: 0, w: 32, h: 32, ...geo, maxIter: 500 }, whole);
+    renderTile(ref, null, { generation: 0, pass: 0, x: 0, y: 0, w: 32, h: 32, ...geo, maxIter: 500 }, whole);
     const part = new Float32Array(8 * 8);
-    renderTile(ref, { generation: 0, pass: 0, x: 16, y: 8, w: 8, h: 8, ...geo, maxIter: 500 }, part);
+    renderTile(ref, null, { generation: 0, pass: 0, x: 16, y: 8, w: 8, h: 8, ...geo, maxIter: 500 }, part);
     for (let py = 0; py < 8; py++) {
       for (let px = 0; px < 8; px++) {
         expect(part[py * 8 + px]).toBe(whole[(8 + py) * 32 + 16 + px]);

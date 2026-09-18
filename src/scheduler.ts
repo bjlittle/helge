@@ -1,4 +1,5 @@
 import type { BigComplex } from './bigfloat';
+import type { SharedBlaMeta } from './bla';
 import type { TileJob } from './perturb';
 import type { SharedRefMeta } from './reference';
 import {
@@ -11,14 +12,14 @@ export interface WorkerLike {
   terminate(): void;
 }
 
-export type ToReferenceWorker = {
-  type: 'compute'; id: number; centre: BigComplex; length: number; bits: number; delta0Max: number;
-};
+export type ToReferenceWorker =
+  | { type: 'compute'; id: number; centre: BigComplex; length: number; bits: number; delta0Max: number }
+  | { type: 'rebuildBla'; id: number; delta0Max: number };
 export type FromReferenceWorker =
   | { type: 'progress'; id: number; done: number; total: number }
-  | { type: 'done'; id: number; ref: SharedRefMeta };
+  | { type: 'done'; id: number; ref: SharedRefMeta; bla: SharedBlaMeta };
 export type ToRenderWorker =
-  | { type: 'setShared'; ref: SharedRefMeta }
+  | { type: 'setShared'; ref: SharedRefMeta; bla: SharedBlaMeta | null }
   | { type: 'tile'; job: TileJob };
 export type FromRenderWorker = { type: 'tile'; job: TileJob; data: Float32Array };
 
@@ -60,9 +61,11 @@ export const DELTA0_HEADROOM = 2;
 
 interface PendingReference {
   id: number;
+  kind: 'compute' | 'rebuild';
   centre: BigComplex;
-  length: number;
+  capacity: number;
   bits: number;
+  delta0Max: number;
 }
 
 interface PassState {
@@ -89,6 +92,7 @@ export class Scheduler {
   private readonly slots: Slot[] = [];
   private refWorker: WorkerLike;
   private ref: SharedRefMeta | null = null;
+  private bla: SharedBlaMeta | null = null;
   private pending: PendingReference | null = null;
   private nextId = 1;
   private view: ViewState | null = null;
@@ -119,11 +123,20 @@ export class Scheduler {
     const bits = precisionBits(view.scale);
     const half = halfDiagonal(view, target.widthCss, target.heightCss);
     if (this.ref && this.reusable(this.ref.centre, this.ref.capacity, this.ref.bits, view, need, bits, half)) {
-      this.cancelPending();
-      this.startPasses();
+      const need0 = this.delta0Needed(this.ref.centre, view, half);
+      if (this.bla && need0 <= this.bla.delta0Max) {
+        this.cancelPending();
+        this.startPasses();
+        return;
+      }
+      if (this.pending?.kind === 'rebuild' && this.pending.delta0Max >= need0) return;
+      this.requestRebuild(this.ref.centre, this.ref.capacity, this.ref.bits, DELTA0_HEADROOM * need0);
       return;
     }
-    if (this.pending && this.reusable(this.pending.centre, this.pending.length, this.pending.bits, view, need, bits, half)) {
+    if (this.pending && this.reusable(this.pending.centre, this.pending.capacity, this.pending.bits, view, need, bits, half)) {
+      const need0 = this.delta0Needed(this.pending.centre, view, half);
+      if (this.pending.delta0Max >= need0) return;
+      this.requestRebuild(this.pending.centre, this.pending.capacity, this.pending.bits, DELTA0_HEADROOM * need0);
       return;
     }
     this.requestReference(view.centre, need, bits, DELTA0_HEADROOM * half);
@@ -155,20 +168,36 @@ export class Scheduler {
     return Math.hypot(d.re, d.im) <= REUSE_RADIUS * half && need <= capacity && bits >= needBits;
   }
 
-  /** Abandons an in-flight reference request so its late result cannot restart passes mid-generation. */
+  private delta0Needed(centre: BigComplex, view: ViewState, half: number): number {
+    const d = offsetFrom(centre, view);
+    return Math.hypot(d.re, d.im) + half;
+  }
+
+  /** Drops a pending request. An in-flight compute is terminated; a rebuild is simply ignored on arrival. */
   private cancelPending(): void {
     if (!this.pending) return;
-    this.refWorker.terminate();
-    this.refWorker = this.createReferenceWorker();
+    if (this.pending.kind === 'compute') {
+      this.refWorker.terminate();
+      this.refWorker = this.createReferenceWorker();
+    }
     this.pending = null;
   }
 
   private requestReference(centre: BigComplex, length: number, bits: number, delta0Max: number): void {
     this.cancelPending();
     const id = this.nextId++;
-    this.pending = { id, centre, length, bits };
+    this.pending = { id, kind: 'compute', centre, capacity: length, bits, delta0Max };
     this.events.onReferenceStart();
     const msg: ToReferenceWorker = { type: 'compute', id, centre, length, bits, delta0Max };
+    this.refWorker.postMessage(msg);
+  }
+
+  /** Rebuilds the table for the reference the worker holds (or is computing), queued behind any compute. */
+  private requestRebuild(centre: BigComplex, capacity: number, bits: number, delta0Max: number): void {
+    const id = this.nextId++;
+    this.pending = { id, kind: 'rebuild', centre, capacity, bits, delta0Max };
+    this.events.onReferenceStart();
+    const msg: ToReferenceWorker = { type: 'rebuildBla', id, delta0Max };
     this.refWorker.postMessage(msg);
   }
 
@@ -180,8 +209,9 @@ export class Scheduler {
     }
     this.pending = null;
     this.ref = msg.ref;
+    this.bla = msg.bla;
     this.events.onReferenceDone();
-    const shared: ToRenderWorker = { type: 'setShared', ref: msg.ref };
+    const shared: ToRenderWorker = { type: 'setShared', ref: msg.ref, bla: msg.bla };
     for (const s of this.slots) s.worker.postMessage(shared);
     if (this.view && this.target) this.startPasses();
   }

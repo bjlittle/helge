@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { SharedBlaMeta } from '../src/bla';
 import type { SharedRefMeta } from '../src/reference';
 import {
   DELTA0_HEADROOM, Scheduler, type FromRenderWorker, type PassResult, type ToReferenceWorker,
@@ -17,8 +18,10 @@ class FakeWorker implements WorkerLike {
   tiles(): ToRenderWorker[] {
     return (this.posted as ToRenderWorker[]).filter((m) => m.type === 'tile');
   }
-  computes(): ToReferenceWorker[] {
-    return (this.posted as ToReferenceWorker[]).filter((m) => m.type === 'compute');
+  computes(): Extract<ToReferenceWorker, { type: 'compute' }>[] {
+    return (this.posted as ToReferenceWorker[]).filter(
+      (m): m is Extract<ToReferenceWorker, { type: 'compute' }> => m.type === 'compute',
+    );
   }
   outstanding(): number { return this.tiles().length - this.answered; }
   /** Answers the oldest unanswered tile with a buffer filled with `value`. */
@@ -32,11 +35,16 @@ class FakeWorker implements WorkerLike {
   }
 }
 
-function fakeRef(msg: ToReferenceWorker): SharedRefMeta {
-  return {
-    buffer: new SharedArrayBuffer(16 * msg.length), length: msg.length, capacity: msg.length,
-    escaped: false, centre: msg.centre, bits: msg.bits,
-  };
+function fakeDone(msg: ToReferenceWorker, previous?: { ref: SharedRefMeta }): { ref: SharedRefMeta; bla: SharedBlaMeta } {
+  if (msg.type === 'compute') {
+    const ref: SharedRefMeta = {
+      buffer: new SharedArrayBuffer(16 * msg.length), length: msg.length, capacity: msg.length,
+      escaped: false, centre: msg.centre, bits: msg.bits,
+    };
+    return { ref, bla: { buffer: new SharedArrayBuffer(40), levels: 1, length: msg.length, delta0Max: msg.delta0Max } };
+  }
+  if (!previous) throw new Error('rebuild without a previous reference');
+  return { ref: previous.ref, bla: { buffer: new SharedArrayBuffer(40), levels: 1, length: previous.ref.length, delta0Max: msg.delta0Max } };
 }
 
 const W = 128;
@@ -63,10 +71,13 @@ function setup(poolSize = 2) {
       onReferenceDone: () => { counts.dones++; },
     },
   );
+  let lastDone: { ref: SharedRefMeta } | undefined;
   const completeReference = () => {
     const w = refs[refs.length - 1];
-    const msg = w.computes()[w.computes().length - 1];
-    w.receive({ type: 'done', id: msg.id, ref: fakeRef(msg) });
+    const msg = w.posted[w.posted.length - 1] as ToReferenceWorker;
+    const done = fakeDone(msg, lastDone);
+    lastDone = done;
+    w.receive({ type: 'done', id: msg.id, ...done });
   };
   const drain = () => {
     for (let guard = 0; guard < 1000; guard++) {
@@ -180,7 +191,7 @@ describe('Scheduler', () => {
     s.scheduler.render(zoomAbout(view, 64, 32, 1e12, W, H), target);
     expect(s.refs[0].terminated).toBe(true);
     expect(s.refs).toHaveLength(2);
-    s.refs[0].receive({ type: 'done', id: first.id, ref: fakeRef(first) });
+    s.refs[0].receive({ type: 'done', id: first.id, ...fakeDone(first) });
     expect(s.counts.dones).toBe(0);
     s.completeReference();
     expect(s.counts.dones).toBe(1);
@@ -211,13 +222,65 @@ describe('Scheduler', () => {
     s.scheduler.render(view, target);
     expect(s.refs[0].terminated).toBe(true);
     expect(s.refs).toHaveLength(2);
-    s.refs[0].receive({ type: 'done', id: abandoned.id, ref: fakeRef(abandoned) });
+    s.refs[0].receive({ type: 'done', id: abandoned.id, ...fakeDone(abandoned) });
     expect(s.counts.dones).toBe(1);
     s.drain();
     expect(s.passes.map((p) => p.generation)).toEqual([3, 3, 3, 3]);
     expect(s.passes[3].values.every((v) => v === 1)).toBe(true);
     const gen3Tiles = s.renders.flatMap((r) => r.tiles()).filter((t) => t.type === 'tile' && t.job.generation === 3);
     expect(gen3Tiles).toHaveLength(5);
+  });
+
+  it('shares the BLA table alongside the reference', () => {
+    const s = setup();
+    s.scheduler.render(defaultView(W), target);
+    s.completeReference();
+    const shared = s.renders[0].posted[0] as ToRenderWorker;
+    expect(shared.type === 'setShared' && shared.bla !== null).toBe(true);
+  });
+
+  it('rebuilds the table when zooming out past its bound and waits for it', () => {
+    const s = setup();
+    const view = defaultView(W);
+    s.scheduler.render(view, target);
+    s.completeReference();
+    const tilesBefore = s.renders.map((r) => r.tiles().length);
+    s.scheduler.render(zoomAbout(view, 64, 32, 1 / 3, W, H), target);
+    const last = s.refs[0].posted[s.refs[0].posted.length - 1] as ToReferenceWorker;
+    expect(last.type).toBe('rebuildBla');
+    expect(last.type === 'rebuildBla' && last.delta0Max).toBeCloseTo(DELTA0_HEADROOM * 3 * halfDiagonal(view, W, H), 12);
+    expect(s.renders.map((r) => r.tiles().length)).toEqual(tilesBefore);
+    for (const r of s.renders) r.answerOne();
+    expect(s.renders.map((r) => r.tiles().length)).toEqual(tilesBefore);
+    s.completeReference();
+    for (const r of s.renders) {
+      const t = r.tiles()[r.tiles().length - 1];
+      expect(t.type === 'tile' && t.job.generation).toBe(2);
+    }
+  });
+
+  it('a small zoom in reuses reference and table with no worker messages', () => {
+    const s = setup();
+    const view = defaultView(W);
+    s.scheduler.render(view, target);
+    s.completeReference();
+    const posted = s.refs[0].posted.length;
+    s.scheduler.render(zoomAbout(view, 64, 32, 1.05, W, H), target);
+    expect(s.refs[0].posted.length).toBe(posted);
+  });
+
+  it('cancels a pending rebuild when a later view no longer needs it', () => {
+    const s = setup();
+    const view = defaultView(W);
+    s.scheduler.render(view, target);
+    s.completeReference();
+    s.scheduler.render(zoomAbout(view, 64, 32, 1 / 3, W, H), target);
+    const rebuild = s.refs[0].posted[s.refs[0].posted.length - 1] as ToReferenceWorker;
+    s.scheduler.render(view, target);
+    const donesBefore = s.counts.dones;
+    s.refs[0].receive({ type: 'done', id: rebuild.id, ...fakeDone(rebuild, { ref: fakeDone(s.refs[0].computes()[0]).ref }) });
+    expect(s.counts.dones).toBe(donesBefore);
+    expect(s.refs[0].terminated).toBe(false);
   });
 
   it('forwards progress for the current id and ignores stale ids', () => {
