@@ -1,11 +1,14 @@
 import './styles.css';
+import { toDecimal } from './bigfloat';
 import { CanvasView } from './canvas';
+import { downloadName } from './filename';
 import { createHistory } from './history';
 import { attachInput, GESTURE_END_MS } from './input';
-import { colourise, paletteById } from './palette';
+import { colourise, paletteById, PALETTES } from './palette';
 import { Scheduler, type PassResult, type RenderTarget, type WorkerLike } from './scheduler';
+import { createUi } from './ui';
 import {
-  defaultView, fromHash, pan, sameGeometry, toHash, zoomAbout, type ViewState,
+  defaultView, fromHash, pan, sameGeometry, toHash, zoomAbout, zoomExponent, type ViewState,
 } from './viewport';
 
 const canvas = document.getElementById('view') as HTMLCanvasElement;
@@ -21,7 +24,8 @@ function asWorkerLike(worker: Worker): WorkerLike {
 }
 
 function viewFromHash(hash: string): ViewState {
-  return fromHash(hash) ?? defaultView(target().widthCss);
+  const parsed = fromHash(hash) ?? defaultView(target().widthCss);
+  return PALETTES.some((p) => p.id === parsed.palette) ? parsed : { ...parsed, palette: 'classic' };
 }
 
 let view: ViewState = viewFromHash(location.hash);
@@ -35,6 +39,27 @@ const history = createHistory((hash) => {
   render();
 });
 
+const ui = createUi(document.getElementById('ui') as HTMLElement, PALETTES, {
+  onPalette: (id) => setView({ ...view, palette: id }),
+  onDensity: (d) => setView({ ...view, density: d }),
+  onOffset: (o) => setView({ ...view, offset: o }),
+  onMaxIter: (m) => setView({ ...view, maxIter: m }),
+  onReset: () => setView(defaultView(target().widthCss)),
+  onSave: () => { void save(); },
+  onHelp: () => ui.toggleHelp(),
+});
+
+async function save(): Promise<void> {
+  const blob = await canvasView.toBlob();
+  const name = downloadName(zoomExponent(view, target().widthCss), toDecimal(view.centre.re), toDecimal(view.centre.im));
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 const scheduler = new Scheduler(
   {
     poolSize: Math.max(1, (navigator.hardwareConcurrency || 2) - 1),
@@ -45,10 +70,11 @@ const scheduler = new Scheduler(
     onPass(result) {
       latest = result;
       repaint();
+      if (result.final) ui.setRenderTime(result.elapsedMs);
     },
-    onReferenceStart() {},
-    onReferenceProgress() {},
-    onReferenceDone() {},
+    onReferenceStart() { ui.setProgress(0, 1); },
+    onReferenceProgress(done, total) { ui.setProgress(done, total); },
+    onReferenceDone() { ui.clearProgress(); },
   },
 );
 
@@ -64,6 +90,7 @@ function render(): void {
   canvasView.resize(t.widthCss, t.heightCss, t.dpr);
   canvasView.transformTo(view);
   renderedView = view;
+  ui.setView(view, t.widthCss);
   scheduler.render(view, t);
 }
 
@@ -80,6 +107,7 @@ function setView(next: ViewState): void {
   if (next === view) return;
   const geometryChanged = !sameGeometry(next, view);
   view = next;
+  ui.setView(view, target().widthCss);
   history.write(toHash(view), inGesture ? 'replace' : 'push');
   inGesture = true;
   if (gestureTimer !== undefined) window.clearTimeout(gestureTimer);
@@ -96,9 +124,9 @@ attachInput(canvas, {
   zoomAt: (px, py, factor) => setView(zoomAbout(view, px, py, factor, target().widthCss, target().heightCss)),
   panBy: (dx, dy) => setView(pan(view, dx, dy)),
   reset: () => setView(defaultView(target().widthCss)),
-  save: () => {},
-  toggleHelp: () => {},
-  closeHelp: () => {},
+  save: () => { void save(); },
+  toggleHelp: () => ui.toggleHelp(),
+  closeHelp: () => ui.closeHelp(),
   gestureEnd: endGesture,
 });
 

@@ -53,3 +53,73 @@ test('the back button returns to the view before the last gesture', async ({ pag
   await expect.poll(() => currentHash(page)).toBe(start);
   await waitForImage(page);
 });
+
+async function samplePixels(page: import('@playwright/test').Page): Promise<number[]> {
+  return page.evaluate(() => {
+    const c = document.getElementById('view') as HTMLCanvasElement;
+    const ctx = c.getContext('2d');
+    if (!ctx) return [];
+    const out: number[] = [];
+    for (let i = 0; i < 16; i++) {
+      const x = Math.floor(((i % 4) + 0.5) * (c.width / 4));
+      const y = Math.floor((Math.floor(i / 4) + 0.5) * (c.height / 4));
+      const d = ctx.getImageData(x, y, 1, 1).data;
+      out.push((d[0] << 16) | (d[1] << 8) | d[2]);
+    }
+    return out;
+  });
+}
+
+test('palette change recolours without moving the view', async ({ page }) => {
+  await openViewer(page);
+  await waitForImage(page);
+  await expect.poll(async () => hashParam(await currentHash(page), 'i')).toBe('auto');
+  const before = await currentHash(page);
+  const pixelsBefore = await samplePixels(page);
+  await page.selectOption('#palette', 'fire');
+  await expect.poll(async () => hashParam(await currentHash(page), 'p')).toBe('fire');
+  const after = await currentHash(page);
+  expect(hashParam(after, 're')).toBe(hashParam(before, 're'));
+  expect(hashParam(after, 's')).toBe(hashParam(before, 's'));
+  await expect.poll(async () => {
+    const now = await samplePixels(page);
+    return now.filter((v, i) => v !== pixelsBefore[i]).length;
+  }).toBeGreaterThan(0);
+});
+
+test('the iterations slider overrides the ceiling', async ({ page }) => {
+  await openViewer(page);
+  await waitForImage(page);
+  await page.locator('#iters').fill('12');
+  await expect.poll(async () => hashParam(await currentHash(page), 'i')).toBe('4096');
+  await expect(page.locator('#auto')).not.toBeChecked();
+  await page.locator('#auto').check();
+  await expect.poll(async () => hashParam(await currentHash(page), 'i')).toBe('auto');
+});
+
+test('help overlay toggles with ? and closes with Escape', async ({ page }) => {
+  await openViewer(page);
+  await expect(page.locator('#help-overlay')).toBeHidden();
+  await page.click('#reset');
+  await page.keyboard.press('?');
+  await expect(page.locator('#help-overlay')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#help-overlay')).toBeHidden();
+});
+
+test('S downloads a PNG with a short name', async ({ page }) => {
+  await openViewer(page);
+  await waitForImage(page);
+  const download = page.waitForEvent('download');
+  await page.keyboard.press('s');
+  const file = await download;
+  expect(file.suggestedFilename()).toMatch(/^mandelbrot-e-?\d+\.\d-[0-9a-f]{8}\.png$/);
+});
+
+test('the readout shows the zoom exponent and iteration ceiling', async ({ page }) => {
+  await openViewer(page);
+  await waitForImage(page);
+  await expect(page.locator('#zoom')).toHaveText(/^-?0\.00$/);
+  await expect(page.locator('#ceiling')).toHaveText(/1[,.]?000/);
+  await expect(page.locator('#time')).not.toHaveText('', { timeout: 20_000 });
+});

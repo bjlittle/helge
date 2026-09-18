@@ -14,3 +14,67 @@ html, body {
   touch-action: none;
 }
 #view:active { cursor: grabbing; }
+#ui {
+  position: fixed;
+  left: 12px;
+  bottom: 12px;
+  right: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+#ui > * { pointer-events: auto; }
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  align-items: center;
+  width: fit-content;
+  padding: 8px 12px;
+  background: rgba(20, 20, 24, 0.82);
+  border-radius: 8px;
+  backdrop-filter: blur(6px);
+}
+.toolbar label { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.toolbar input[type="range"] { width: 110px; }
+.toolbar select, .toolbar button {
+  font: inherit;
+  color: inherit;
+  background: #2a2a30;
+  border: 1px solid #444;
+  border-radius: 4px;
+  padding: 3px 8px;
+}
+.toolbar button { cursor: pointer; }
+.toolbar button:hover { background: #3a3a42; }
+.buttons { display: inline-flex; gap: 6px; }
+.readout {
+  width: fit-content;
+  padding: 4px 10px;
+  background: rgba(20, 20, 24, 0.7);
+  border-radius: 6px;
+  font-variant-numeric: tabular-nums;
+}
+.progress {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.1);
+}
+#progress-bar { height: 100%; width: 0; background: #6cf; transition: width 120ms linear; }
+.help {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.6);
+}
+.help[hidden] { display: none; }
+.help > * { max-width: 420px; }
+.help h2 { margin: 0 0 8px; }
+.help table { border-collapse: collapse; background: rgba(20, 20, 24, 0.95); border-radius: 8px; padding: 12px; }
+.help th { text-align: left; padding: 4px 12px 4px 0; font-weight: 600; }
+.help td { padding: 4px 0; }
