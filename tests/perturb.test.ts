@@ -50,6 +50,15 @@ describe('iteratePixel', () => {
     const expected = iterateDouble(0.5 + d0, 0.5 - d0, 100);
     expect(Math.abs(iteratePixel(ref, d0, -d0, 100) - expected)).toBeLessThan(1e-6);
   });
+
+  it('rebases at the last reference entry with a two-entry reference', () => {
+    const ref = makeRef(-0.5, 0, 2);
+    expect(ref.length).toBe(2);
+    expect(ref.escaped).toBe(false);
+    const expected = iterateDouble(0.5, 0.5, 100);
+    expect(Math.abs(iteratePixel(ref, 0.5 - -0.5, 0.5 - 0, 100) - expected)).toBeLessThan(1e-6);
+    expect(iteratePixel(ref, 0.4, 0.75, 300)).toBe(-1);
+  });
 });
 
 describe('renderTile', () => {
@@ -78,6 +87,34 @@ describe('renderTile', () => {
     expect(checked).toBeGreaterThan(200);
   });
 
+  it('distinguishes the vertical direction on an off-axis frame', () => {
+    const W = 256;
+    const scale = 4 / (W * 10);
+    const bits = precisionBits(scale);
+    const view = { ...defaultView(W), centre: cfromNumbers(0.3, 0.6, bits), scale };
+    const ref = makeRef(0.3, 0.6, 1024, bits);
+    const geo = passGeometry(view, ref.centre, 8, W, W);
+    const job: TileJob = { generation: 0, pass: 0, x: 0, y: 0, w: 32, h: 32, ...geo, maxIter: 1000 };
+    const out = new Float32Array(32 * 32);
+    renderTile(ref, job, out);
+    let checked = 0;
+    let asymmetric = 0;
+    for (let py = 0; py < 32; py++) {
+      for (let px = 0; px < 32; px++) {
+        const re = 0.3 + geo.originRe + px * geo.step;
+        const dim = geo.originIm - py * geo.step;
+        const expected = iterateDouble(re, 0.6 + dim, 1000);
+        if (expected > 0 && expected < 30) {
+          checked++;
+          expect(Math.abs(out[py * 32 + px] - expected)).toBeLessThan(1e-4);
+          if (Math.abs(iterateDouble(re, 0.6 - dim, 1000) - expected) > 1e-3) asymmetric++;
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(100);
+    expect(asymmetric).toBeGreaterThan(50);
+  });
+
   it('agrees with the oracle across an exterior frame at zoom exponent 8', () => {
     const W = 256;
     const scale = 4 / (W * 1e8);
@@ -101,6 +138,15 @@ describe('renderTile', () => {
         expect(Math.abs(out[py * 32 + px] - expected)).toBeLessThan(1e-4);
       }
     }
+    const corners: [number, number][] = [[0, 0], [31, 0], [0, 31], [31, 31]];
+    const values = corners.map(([px, py]) => {
+      const d0re = geo.originRe + px * geo.step;
+      const d0im = geo.originIm - py * geo.step;
+      const expected = iterateDouble(0.5 + d0re, 0.5 + d0im, maxIter);
+      expect(Math.abs(iteratePixel(ref, d0re, d0im, maxIter) - expected)).toBeLessThan(1e-9);
+      return expected;
+    });
+    expect(Math.abs(values[0] - values[3])).toBeGreaterThan(1e-8);
   });
 
   it('honours the tile offset within a pass', () => {
