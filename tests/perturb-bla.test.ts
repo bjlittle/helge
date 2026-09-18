@@ -81,8 +81,34 @@ describe('iteratePixel with BLA', () => {
     expect(perturbStats.skips).toBeGreaterThan(100);
     const plain = new Float32Array(16 * 16);
     renderTile(ref, null, job, plain);
-    const exterior = (a: Float32Array) => a.filter((v) => v >= 0).length / a.length;
-    expect(Math.abs(exterior(fast) - exterior(plain))).toBeLessThanOrEqual(0.25);
+    for (let i = 0; i < fast.length; i++) expect(Math.abs(fast[i] - plain[i])).toBeLessThan(1e-3);
+  });
+
+  it('agrees with plain perturbation across a varying field at zoom exponent 12', () => {
+    const W = 64;
+    const scale = 4 / (W * 1e12);
+    const bits = precisionBits(scale);
+    const centre = cfromNumbers(-0.7436438870371587, 0.1318259042053119, bits);
+    const view = { ...defaultView(W), centre, scale };
+    const maxIter = autoMaxIter(view, W);
+    const ref = makeRef(-0.7436438870371587, 0.1318259042053119, refLength(maxIter), bits);
+    const geo = passGeometry(view, ref.centre, 4, W, W);
+    const table = makeTable(ref, 2 * Math.hypot(geo.originRe, geo.originIm));
+    const job: TileJob = { generation: 0, pass: 0, x: 0, y: 0, w: 16, h: 16, ...geo, maxIter };
+    const plain = new Float32Array(16 * 16);
+    const fast = new Float32Array(16 * 16);
+    renderTile(ref, null, job, plain);
+    resetStats();
+    renderTile(ref, table, job, fast);
+    expect(perturbStats.skips).toBeGreaterThan(100);
+    const exterior = Array.from(plain).filter((v) => v >= 0);
+    expect(exterior.length).toBeGreaterThan(50);
+    expect(Math.max(...exterior) - Math.min(...exterior)).toBeGreaterThan(1);
+    let agree = 0;
+    for (let i = 0; i < plain.length; i++) {
+      if ((plain[i] < 0 && fast[i] < 0) || Math.abs(plain[i] - fast[i]) < 1e-2) agree++;
+    }
+    expect(agree / plain.length).toBeGreaterThanOrEqual(0.95);
   });
 
   it('does not skip past maxIter', () => {

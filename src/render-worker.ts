@@ -16,6 +16,7 @@ scope.onmessage = (ev: MessageEvent) => {
   }
   const { job } = msg;
   const out = new Float32Array(job.w * job.h);
+  // The scheduler always shares a reference before posting tiles; the fill is a defensive fallback.
   if (ref) renderTile(ref, bla, job, out);
   else out.fill(-1);
   const reply: FromRenderWorker = { type: 'tile', job, data: out };

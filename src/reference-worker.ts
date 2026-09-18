@@ -21,6 +21,7 @@ scope.onmessage = (ev: MessageEvent) => {
     scope.postMessage(reply);
     return;
   }
+  if (msg.type !== 'compute') return;
   const buffer = new SharedArrayBuffer(msg.length * 16);
   const z = new Float64Array(buffer);
   const result = computeReference(msg.centre, msg.length, msg.bits, z, (done) => {

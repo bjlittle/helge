@@ -283,6 +283,60 @@ describe('Scheduler', () => {
     expect(s.refs[0].terminated).toBe(false);
   });
 
+  it('recomputes instead of rebuilding when the reference worker was recreated and holds nothing', () => {
+    const s = setup();
+    const view = defaultView(W);
+    s.scheduler.render(view, target);
+    s.completeReference();
+    s.scheduler.render(pan(view, 10000, 0), target);
+    s.scheduler.render(view, target);
+    expect(s.refs).toHaveLength(2);
+    expect(s.refs[1].posted).toHaveLength(0);
+    s.scheduler.render(zoomAbout(view, 64, 32, 1 / 3, W, H), target);
+    const last = s.refs[1].posted[s.refs[1].posted.length - 1] as ToReferenceWorker;
+    expect(last.type).toBe('compute');
+    s.completeReference();
+    s.drain();
+    expect(s.passes.length).toBeGreaterThan(0);
+    expect(s.passes.every((p) => p.generation === 4)).toBe(true);
+  });
+
+  it('recomputes instead of rebuilding when the pending compute is for another centre', () => {
+    const s = setup();
+    const view = defaultView(W);
+    s.scheduler.render(view, target);
+    s.completeReference();
+    s.scheduler.render(pan(view, 10000, 0), target);
+    expect(s.refs[0].computes()).toHaveLength(2);
+    s.scheduler.render(zoomAbout(view, 64, 32, 1 / 3, W, H), target);
+    expect(s.refs[0].terminated).toBe(true);
+    expect(s.refs).toHaveLength(2);
+    const last = s.refs[1].posted[s.refs[1].posted.length - 1] as ToReferenceWorker;
+    expect(last.type).toBe('compute');
+    expect(s.refs[1].posted.some((m) => (m as ToReferenceWorker).type === 'rebuildBla')).toBe(false);
+  });
+
+  it('queues a rebuild behind the compute the worker is running when the bound grows', () => {
+    const s = setup();
+    const view = defaultView(W);
+    s.scheduler.render(view, target);
+    s.scheduler.render(zoomAbout(view, 64, 32, 1 / 3, W, H), target);
+    expect(s.refs).toHaveLength(1);
+    expect(s.refs[0].terminated).toBe(false);
+    expect(s.refs[0].posted.map((m) => (m as ToReferenceWorker).type)).toEqual(['compute', 'rebuildBla']);
+    const compute = s.refs[0].computes()[0];
+    const rebuild = s.refs[0].posted[1] as ToReferenceWorker;
+    const done = fakeDone(compute);
+    s.refs[0].receive({ type: 'done', id: compute.id, ...done });
+    expect(s.counts.dones).toBe(0);
+    s.refs[0].receive({ type: 'done', id: rebuild.id, ...fakeDone(rebuild, done) });
+    expect(s.counts.dones).toBe(1);
+    for (const r of s.renders) {
+      const t = r.tiles()[0];
+      expect(t.type === 'tile' && t.job.generation).toBe(2);
+    }
+  });
+
   it('forwards progress for the current id and ignores stale ids', () => {
     const s = setup();
     s.scheduler.render(defaultView(W), target);

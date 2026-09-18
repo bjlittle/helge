@@ -59,6 +59,10 @@ export const PASS_STRIDES: readonly number[] = [8, 4, 2, 1];
 export const REUSE_RADIUS = 4;
 export const DELTA0_HEADROOM = 2;
 
+function sameCentre(a: BigComplex | null, b: BigComplex): boolean {
+  return a !== null && a.re.bits === b.re.bits && a.re.m === b.re.m && a.im.m === b.im.m;
+}
+
 interface PendingReference {
   id: number;
   kind: 'compute' | 'rebuild';
@@ -94,6 +98,8 @@ export class Scheduler {
   private ref: SharedRefMeta | null = null;
   private bla: SharedBlaMeta | null = null;
   private pending: PendingReference | null = null;
+  /** Centre of the reference the current reference-worker instance holds, or will hold once its posted compute finishes. */
+  private workerHolds: BigComplex | null = null;
   private nextId = 1;
   private view: ViewState | null = null;
   private target: RenderTarget | null = null;
@@ -129,14 +135,28 @@ export class Scheduler {
         this.startPasses();
         return;
       }
-      if (this.pending?.kind === 'rebuild' && this.pending.delta0Max >= need0) return;
-      this.requestRebuild(this.ref.centre, this.ref.capacity, this.ref.bits, DELTA0_HEADROOM * need0);
+      if (
+        this.pending?.kind === 'rebuild'
+        && this.pending.delta0Max >= need0
+        && sameCentre(this.pending.centre, this.ref.centre)
+      ) {
+        return;
+      }
+      if (sameCentre(this.workerHolds, this.ref.centre)) {
+        this.requestRebuild(this.ref.centre, this.ref.capacity, this.ref.bits, DELTA0_HEADROOM * need0);
+      } else {
+        this.requestReference(view.centre, need, bits, DELTA0_HEADROOM * half);
+      }
       return;
     }
     if (this.pending && this.reusable(this.pending.centre, this.pending.capacity, this.pending.bits, view, need, bits, half)) {
       const need0 = this.delta0Needed(this.pending.centre, view, half);
       if (this.pending.delta0Max >= need0) return;
-      this.requestRebuild(this.pending.centre, this.pending.capacity, this.pending.bits, DELTA0_HEADROOM * need0);
+      if (sameCentre(this.workerHolds, this.pending.centre)) {
+        this.requestRebuild(this.pending.centre, this.pending.capacity, this.pending.bits, DELTA0_HEADROOM * need0);
+      } else {
+        this.requestReference(view.centre, need, bits, DELTA0_HEADROOM * half);
+      }
       return;
     }
     this.requestReference(view.centre, need, bits, DELTA0_HEADROOM * half);
@@ -157,6 +177,7 @@ export class Scheduler {
   private createReferenceWorker(): WorkerLike {
     const worker = this.options.createReferenceWorker();
     worker.onmessage = (ev) => this.onReferenceMessage(ev.data as FromReferenceWorker);
+    this.workerHolds = null;
     return worker;
   }
 
@@ -184,9 +205,13 @@ export class Scheduler {
   }
 
   private requestReference(centre: BigComplex, length: number, bits: number, delta0Max: number): void {
-    this.cancelPending();
+    if (this.pending) {
+      this.refWorker.terminate();
+      this.refWorker = this.createReferenceWorker();
+    }
     const id = this.nextId++;
     this.pending = { id, kind: 'compute', centre, capacity: length, bits, delta0Max };
+    this.workerHolds = centre;
     this.events.onReferenceStart();
     const msg: ToReferenceWorker = { type: 'compute', id, centre, length, bits, delta0Max };
     this.refWorker.postMessage(msg);
