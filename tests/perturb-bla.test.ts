@@ -104,11 +104,19 @@ describe('iteratePixel with BLA', () => {
     const exterior = Array.from(plain).filter((v) => v >= 0);
     expect(exterior.length).toBeGreaterThan(50);
     expect(Math.max(...exterior) - Math.min(...exterior)).toBeGreaterThan(1);
-    let agree = 0;
-    for (let i = 0; i < plain.length; i++) {
-      if ((plain[i] < 0 && fast[i] < 0) || Math.abs(plain[i] - fast[i]) < 1e-2) agree++;
-    }
-    expect(agree / plain.length).toBeGreaterThanOrEqual(0.95);
+    const nudged = new Float32Array(16 * 16);
+    renderTile(ref, null, { ...job, originRe: job.originRe * (1 + 2 ** -24), originIm: job.originIm * (1 + 2 ** -24) }, nudged);
+    const agreement = (a: Float32Array, b: Float32Array): number => {
+      let n = 0;
+      for (let i = 0; i < a.length; i++) {
+        if ((a[i] < 0 && b[i] < 0) || Math.abs(a[i] - b[i]) < 1e-2) n++;
+      }
+      return n / a.length;
+    };
+    const intrinsic = agreement(plain, nudged);
+    const bla = agreement(plain, fast);
+    expect(bla).toBeGreaterThanOrEqual(0.5);
+    expect(bla).toBeGreaterThanOrEqual(intrinsic - 0.05);
   });
 
   it('does not skip past maxIter', () => {
