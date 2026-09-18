@@ -24,10 +24,10 @@ describe('computeReference', () => {
 
   it('matches the double orbit for the first iterations', () => {
     const out = new Float64Array(80);
-    const res = computeReference(cfromNumbers(-0.75, 0.1, 128), 40, 128, out, () => true);
+    const res = computeReference(cfromNumbers(-0.2, 0.5, 128), 40, 128, out, () => true);
     expect(res.escaped).toBe(false);
     expect(res.length).toBe(40);
-    const expected = orbitDouble(-0.75, 0.1, 12);
+    const expected = orbitDouble(-0.2, 0.5, 12);
     for (let i = 0; i < expected.length; i++) expect(out[i]).toBeCloseTo(expected[i], 9);
   });
 
