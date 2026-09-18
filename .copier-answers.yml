@@ -13,6 +13,6 @@ intent_path: docs/changes/{date}-{slug}/intent.md
 plan_path: docs/changes/{date}-{slug}/plan.md
 project_name: project-wibble
 spec_path: docs/changes/{date}-{slug}/spec.md
-verify_build: ''
-verify_lint: ''
-verify_test: ''
+verify_build: npm run build (prints ✓ built in …; dist/ lists render-worker and reference-worker assets)
+verify_lint: npm run lint (eslint . && tsc --noEmit; no output, exit 0)
+verify_test: npm test (vitest run; every test file green)
